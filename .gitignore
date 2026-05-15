@@ -1,0 +1,36 @@
+# Secrets
+.env
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Runtime data and logs
+runtime/
+RunLogs/
+PubMed/
+*.sqlite3
+*.lock
+*.bak
+*.tmp
+~$*
+
+# Real private workbooks; commit only sanitized fixtures intentionally
+NB_Author_2026.xlsm
+ReviewInvitationLog.xlsx
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
