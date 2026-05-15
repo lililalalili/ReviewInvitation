@@ -36,7 +36,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.legacy_v14:
         legacy = _load_legacy_module()
-        return int(legacy.run_with_lock())
+        rc = legacy.run_with_lock()
+        return 0 if rc is None else int(rc)
 
     print("Baseline package scaffold is ready. Use --legacy-v14 for production behavior until later tasks land.")
     return 0
