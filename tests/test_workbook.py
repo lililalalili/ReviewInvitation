@@ -84,6 +84,14 @@ def test_build_pubmed_article_link_pmid_format():
     assert build_pubmed_article_link("12345678") == "https://pubmed.ncbi.nlm.nih.gov/12345678/"
 
 
+def test_build_pubmed_article_link_none_returns_empty():
+    assert build_pubmed_article_link(None) == ""
+
+
+def test_build_pubmed_article_link_empty_string_returns_empty():
+    assert build_pubmed_article_link("") == ""
+
+
 def test_load_workbook_preserve_vba_uses_keep_vba(monkeypatch):
     called = {}
 
