@@ -7,7 +7,7 @@ name = "nb-review-invitation-agent"
 version = "0.1.0"
 description = "Baseline refactor scaffold for NB review invitation workflow"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["openpyxl>=3.1"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
