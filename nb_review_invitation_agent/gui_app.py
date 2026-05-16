@@ -9,8 +9,10 @@ from .gui_controller import (
     WorkbookReviewController,
     build_email_search_url,
     default_open_url,
-    invitation_placeholder,
 )
+from .invitation_service import InvitationService
+from .mailer_outlook import OutlookMailer
+from .template_renderer import TemplateRenderer
 
 
 class ReviewGuiApp:
@@ -21,6 +23,12 @@ class ReviewGuiApp:
         self.root.title("NB Review Invitation")
         self._editable_vars: dict[str, tk.StringVar] = {}
         self._readonly_vars: dict[str, tk.StringVar] = {}
+        self.invitation_service = InvitationService(
+            controller=self.controller,
+            renderer=TemplateRenderer(),
+            mailer=OutlookMailer(),
+            confirm_send=lambda prompt: messagebox.askyesno("确认发送", prompt),
+        )
         self._build_ui()
         self._refresh_view()
 
@@ -72,8 +80,8 @@ class ReviewGuiApp:
         ttk.Button(nav, text="First row in current batch", command=self._first).pack(side="left", padx=2)
         ttk.Button(nav, text="Last row in current batch", command=self._last).pack(side="left", padx=2)
         ttk.Button(nav, text="Save all modifications", command=self._save).pack(side="left", padx=2)
-        ttk.Button(nav, text="向当前作者邀稿", command=self._invite_placeholder).pack(side="left", padx=2)
-        ttk.Button(nav, text="BatchInvitation", command=self._invite_placeholder).pack(side="left", padx=2)
+        ttk.Button(nav, text="向当前作者邀稿", command=self._invite_current).pack(side="left", padx=2)
+        ttk.Button(nav, text="BatchInvitation", command=self._invite_batch).pack(side="left", padx=2)
 
     def _apply_edits(self) -> None:
         self.controller.update_current_row({k: v.get() for k, v in self._editable_vars.items()})
@@ -122,8 +130,32 @@ class ReviewGuiApp:
         else:
             default_open_url(value)
 
-    def _invite_placeholder(self):
-        messagebox.showinfo("Not available", invitation_placeholder())
+    def _invite_current(self):
+        self._apply_edits()
+        result = self.invitation_service.invite_current(self.controller.get_current_row())
+        if result.status == "Sent":
+            self._refresh_view()
+            messagebox.showinfo("邀请结果", result.message)
+        elif result.status == "Cancelled":
+            messagebox.showwarning("邀请取消", result.message)
+        elif result.status == "Skipped":
+            messagebox.showwarning("已跳过", result.message)
+        else:
+            messagebox.showerror("邀请失败", result.message)
+
+    def _invite_batch(self):
+        self._apply_edits()
+        results = self.invitation_service.invite_batch(self.controller.get_selected_batch_rows())
+        sent = sum(1 for r in results if r.status == "Sent")
+        skipped = sum(1 for r in results if r.status == "Skipped")
+        cancelled = sum(1 for r in results if r.status == "Cancelled")
+        errors = [r for r in results if r.status == "Error"]
+        self._refresh_view()
+        summary = f"Sent={sent}, Skipped={skipped}, Cancelled={cancelled}, Error={len(errors)}"
+        if errors:
+            messagebox.showerror("BatchInvitation", f"{summary}\n首个错误: {errors[0].message}")
+        else:
+            messagebox.showinfo("BatchInvitation", summary)
 
 
 def launch_gui(config: RuntimeConfig) -> None:

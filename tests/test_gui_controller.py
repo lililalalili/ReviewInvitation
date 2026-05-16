@@ -5,7 +5,6 @@ from nb_review_invitation_agent.gui_controller import (
     UNBATCHED,
     WorkbookReviewController,
     build_email_search_url,
-    invitation_placeholder,
 )
 
 
@@ -72,15 +71,5 @@ def test_editable_fields_update_and_readonly_not_written(tmp_path):
     c.save_workbook(p)
 
 
-def test_link_builders_and_invitation_placeholder():
+def test_link_builders():
     assert build_email_search_url("a+b@example.edu") == "https://www.bing.com/search?q=a%2Bb%40example.edu"
-    assert "Task 05" in invitation_placeholder()
-
-
-def test_invitation_placeholder_does_not_change_date_of_invitation():
-    c = make_controller()
-    c.set_batch("B2")
-    before = c.get_current_row().values["Date of Invitaion"]
-    invitation_placeholder()
-    after = c.get_current_row().values["Date of Invitaion"]
-    assert before == after == ""
