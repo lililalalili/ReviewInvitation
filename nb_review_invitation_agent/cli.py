@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 
 from .config import load_config
+from .gui_app import launch_gui
 
 
 def _load_legacy_module():
@@ -21,7 +22,8 @@ def _load_legacy_module():
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="NB Review Invitation Agent")
     p.add_argument("--dry-run", action="store_true", help="No-op execution for CI/bootstrap checks")
-    p.add_argument("--no-gui", action="store_true", help="Disable GUI launch (reserved for future tasks)")
+    p.add_argument("--no-gui", action="store_true", help="Disable GUI launch")
+    p.add_argument("--gui", action="store_true", help="Launch review GUI")
     p.add_argument("--fake-providers", action="store_true", help="Use offline fake providers in tests/CI")
     p.add_argument("--legacy-v14", action="store_true", help="Run legacy v14 monolithic script")
     return p
@@ -32,6 +34,10 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config(dry_run=args.dry_run, no_gui=args.no_gui, fake_providers=args.fake_providers)
     if args.dry_run and not args.legacy_v14:
         print(f"[DRY-RUN] baseline CLI OK. base_dir={cfg.base_dir}")
+        return 0
+
+    if args.gui and not args.no_gui and not args.legacy_v14:
+        launch_gui(cfg)
         return 0
 
     if args.legacy_v14:
