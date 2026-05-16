@@ -18,11 +18,11 @@ class FakeMailer:
 
 
 class FakeController:
-    def __init__(self, row):
+    def __init__(self, row, save_path="fake.xlsm"):
         self.row = row
         self.written = []
         self.saved = 0
-        self.save_path = "fake.xlsm"
+        self.save_path = save_path
 
     def get_current_row(self):
         return self.row
@@ -96,8 +96,20 @@ def test_confirmation_and_send_failures_and_success():
     assert controller_ok.saved == 1
     assert controller_ok.written and controller_ok.written[0][1] == "Date of Invitaion"
     assert mailer_ok.drafts[0].cc_email == "first@example.com"
+    assert mailer_ok.drafts[0].rendered.template_name == "NB_Template_Review_Yes.docx"
 
     row_nocc = Row(3, {**base_values(), "First Author Email": ""})
     mailer_nocc = FakeMailer()
     InvitationService(FakeController(row_nocc), renderer, mailer_nocc, lambda _: True, today_provider=lambda: date(2026, 5, 16)).invite_current()
     assert mailer_nocc.drafts[0].cc_email == ""
+
+
+def test_missing_save_path_returns_clear_error():
+    renderer = TemplateRenderer()
+    row_ok = Row(2, base_values())
+    controller = FakeController(row_ok, save_path=None)
+    svc = InvitationService(controller, renderer, FakeMailer(), lambda _: True, today_provider=lambda: date(2026, 5, 16))
+    res = svc.invite_current()
+    assert res.status == "Error"
+    assert "save path is missing" in res.message
+    assert controller.written == []

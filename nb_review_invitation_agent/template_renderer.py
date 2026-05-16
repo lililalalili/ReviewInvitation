@@ -19,9 +19,11 @@ class TemplateChoice:
 
 @dataclass(frozen=True)
 class RenderedInvitation:
+    template_path: Path
     template_name: str
     subject: str
-    body_text: str
+    placeholders: dict[str, str]
+    body_text: str = ""
 
 
 def add_calendar_months(value: date, months: int) -> date:
@@ -74,13 +76,23 @@ def select_template_and_subject(row_values: dict[str, str]) -> TemplateChoice:
 
 def build_placeholder_map(row_values: dict[str, str], today: date) -> dict[str, str]:
     overseas = row_values.get("Overseas", "").strip()
+    manual = row_values.get("Manual Decision", "").strip()
+    p_yes = ""
+    p_no = ""
+    if manual == "Review":
+        if overseas == "Yes":
+            p_yes = "For invited overseas authors, article publication charges will be covered by the journal, and NB will pay 1,000 USD remuneration for an accepted Review article."
+        else:
+            p_no = "For invited authors, article publication charges will be covered by the journal."
+    elif manual == "Insight":
+        p_no = "For invited authors, article publication charges will be covered by the journal."
     return {
         "Aaaaa": derive_family_name(row_values),
         "Jjjjj": normalize_journal_name(row_values.get("Journal", "")),
         "Ttttt": trim_terminal_period(row_values.get("Title", "")),
         "Fffff": row_values.get("Research field", "").strip(),
-        "Pppppyes": "For invited overseas authors, article publication charges will be covered by the journal, and NB will pay 1,000 USD remuneration for an accepted Review article." if overseas == "Yes" else "",
-        "Pppppno": "For invited authors, article publication charges will be covered by the journal." if overseas != "Yes" else "",
+        "Pppppyes": p_yes,
+        "Pppppno": p_no,
         "Dddddre": format_readable_date(add_calendar_months(today, 6)),
         "Dddddin": format_readable_date(today.fromordinal(today.toordinal() + 125)),
     }
@@ -97,6 +109,9 @@ class TemplateRenderer:
         if not template_path.exists():
             raise FileNotFoundError(f"Template not found: {template_path}")
 
-        # CI-safe fallback body for tests/non-Windows env.
-        body_text = "\n".join(f"{k}={v}" for k, v in placeholders.items())
-        return RenderedInvitation(template_name=choice.template_name, subject=choice.subject, body_text=body_text)
+        return RenderedInvitation(
+            template_path=template_path,
+            template_name=choice.template_name,
+            subject=choice.subject,
+            placeholders=placeholders,
+        )

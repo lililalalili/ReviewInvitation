@@ -5,7 +5,7 @@ from datetime import date
 from typing import Callable
 
 from .mailer_outlook import DraftMessage
-from .template_renderer import TemplateRenderer, select_template_and_subject
+from .template_renderer import TemplateRenderer
 from .workbook import DATE_OF_INVITAION
 
 
@@ -47,7 +47,7 @@ class InvitationService:
             return InvitationResult("Error", str(exc), row_number, recipient=recipient)
 
         cc_email = rv.get("First Author Email", "").strip()
-        draft = DraftMessage(to_email=recipient, cc_email=cc_email, subject=rendered.subject, body_text=rendered.body_text)
+        draft = DraftMessage(to_email=recipient, cc_email=cc_email, rendered=rendered)
         try:
             sent = self.mailer.create_draft_and_maybe_send(draft, self.confirm_send)
         except Exception as exc:
@@ -57,6 +57,8 @@ class InvitationService:
 
         invite_date = self.today_provider().isoformat()
         try:
+            if not getattr(self.controller, "save_path", None):
+                raise RuntimeError("Workbook save path is missing; cannot persist Date of Invitaion after send")
             self.controller.set_row_value(row_number, DATE_OF_INVITAION, invite_date)
             self.controller.save_workbook(self.controller.save_path)
         except Exception as exc:
