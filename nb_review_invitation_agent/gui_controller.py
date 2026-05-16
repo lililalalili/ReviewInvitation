@@ -54,13 +54,16 @@ class WorkbookReviewController:
         self.batch_ids = list(self.batch_rows.keys())
         self.selected_batch = self._default_batch()
         self.current_index = 0
+        self.save_path: str | Path | None = None
         self._ensure_current_batch_index()
 
     @classmethod
     def from_xlsm_path(cls, path: str | Path) -> "WorkbookReviewController":
         wb = load_workbook_preserve_vba(path)
         ws = wb["Author"] if "Author" in wb.sheetnames else wb.active
-        return cls(wb, ws)
+        instance = cls(wb, ws)
+        instance.save_path = path
+        return instance
 
     def _default_batch(self) -> str:
         last_non_empty = None
@@ -150,6 +153,26 @@ class WorkbookReviewController:
 
     def save_workbook(self, path: str | Path) -> None:
         self.workbook.save(path)
+
+    def set_row_value(self, row_number: int, field: str, value: str) -> None:
+        col = self.header_map.get(field)
+        if col is None:
+            return
+        self.worksheet.cell(row=row_number, column=col, value=value)
+
+    def get_selected_batch_rows(self) -> list[RowView]:
+        rows = self.batch_rows.get(self.selected_batch, [])
+        output: list[RowView] = []
+        for row_number in rows:
+            values = {header: "" for header in DISPLAY_FIELDS}
+            for header in DISPLAY_FIELDS:
+                col = self.header_map.get(header)
+                if col is None:
+                    continue
+                raw = self.worksheet.cell(row=row_number, column=col).value
+                values[header] = "" if raw is None else str(raw)
+            output.append(RowView(row_number=row_number, values=values))
+        return output
 
 
 def build_email_search_url(email: str) -> str:
