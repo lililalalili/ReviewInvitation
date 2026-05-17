@@ -103,7 +103,7 @@ def test_confirmation_and_send_failures_and_success():
     assert mailer_nocc.drafts[0].cc_email == ""
 
 
-def test_missing_save_path_after_send_returns_clear_error():
+def test_missing_save_path_preflight_blocks_send_and_write():
     renderer = TemplateRenderer()
     row_ok = Row(2, base_values())
     controller = FakeController(row_ok)
@@ -112,4 +112,6 @@ def test_missing_save_path_after_send_returns_clear_error():
     res = svc.invite_current()
     assert res.status == "Error"
     assert "save_path" in res.message
+    assert "无法发送" in res.message
+    assert svc.mailer.drafts == []
     assert controller.written == []
