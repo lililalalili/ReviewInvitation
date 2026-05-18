@@ -41,6 +41,10 @@ class InvitationService:
         if not recipient:
             return InvitationResult("Error", "缺少 Email of the Last Author", row_number)
 
+        save_path = getattr(self.controller, "save_path", None)
+        if not save_path:
+            return InvitationResult("Error", "无法发送邀请：controller.save_path 未设置", row_number, recipient=recipient)
+
         try:
             rendered = self.renderer.render_for_row(rv, self.today_provider())
         except Exception as exc:
@@ -61,17 +65,6 @@ class InvitationService:
             return InvitationResult("Error", str(exc), row_number, recipient=recipient, subject=rendered.subject, template_name=rendered.template_name)
         if not sent:
             return InvitationResult("Cancelled", "用户取消发送", row_number, recipient=recipient, subject=rendered.subject, template_name=rendered.template_name)
-
-        save_path = getattr(self.controller, "save_path", None)
-        if not save_path:
-            return InvitationResult(
-                "Error",
-                "邮件已发送，但无法保存：controller.save_path 未设置",
-                row_number,
-                recipient=recipient,
-                subject=rendered.subject,
-                template_name=rendered.template_name,
-            )
 
         invite_date = self.today_provider().isoformat()
         try:

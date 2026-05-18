@@ -104,12 +104,22 @@ def test_confirmation_and_send_failures_and_success():
 
 
 def test_missing_save_path_after_send_returns_clear_error():
-    renderer = TemplateRenderer()
+    class SpyRenderer:
+        called = False
+
+        def render_for_row(self, *_args, **_kwargs):
+            self.called = True
+            raise AssertionError("renderer should not be called when save_path is missing")
+
     row_ok = Row(2, base_values())
     controller = FakeController(row_ok)
     controller.save_path = None
-    svc = InvitationService(controller, renderer, FakeMailer(), lambda _: True, today_provider=lambda: date(2026, 5, 16))
+    mailer = FakeMailer()
+    renderer = SpyRenderer()
+    svc = InvitationService(controller, renderer, mailer, lambda _: True, today_provider=lambda: date(2026, 5, 16))
     res = svc.invite_current()
     assert res.status == "Error"
     assert "save_path" in res.message
+    assert renderer.called is False
+    assert mailer.drafts == []
     assert controller.written == []
