@@ -8,6 +8,8 @@ NB Review Invitation Agent supports Neuroscience Bulletin invitation operations 
 
 ## Installation
 
+GUI, enrichment plumbing, and Outlook invitation workflow are implemented; real Outlook sending must still be smoke-tested on Windows with Office/Outlook installed.
+
 ### Cross-platform dev/CI
 ```bash
 python -m venv .venv

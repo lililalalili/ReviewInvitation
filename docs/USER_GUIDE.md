@@ -19,7 +19,7 @@ Custom template directory support can be added later if needed.
 ## Basic review flow
 1. Open workbook in GUI.
 2. Select batch from dropdown.
-3. Edit fields `Overseas`, `Manual Decision`, and `Research`.
+3. Edit fields `Overseas`, `Manual Decision`, and `Research field`.
 4. Save updates.
 5. Use link buttons to open web/research references.
 

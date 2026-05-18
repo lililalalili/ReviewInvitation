@@ -9,7 +9,7 @@
 7. Run GUI.
 8. Verify workbook opens.
 9. Verify batch dropdown works.
-10. Verify editable fields save (`Overseas`, `Manual Decision`, `Research`).
+10. Verify editable fields save (`Overseas`, `Manual Decision`, `Research field`).
 11. Verify link buttons open references.
 12. Verify current-row invitation creates formatted Outlook draft/send flow.
 13. Verify cancel in confirmation dialog does not send and does not write date.
