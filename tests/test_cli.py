@@ -43,3 +43,13 @@ def test_cli_gui_launch(monkeypatch):
     rc = main(["--gui", "--fake-providers"])
     assert rc == 0
     assert called["ok"] is True
+
+
+def test_cli_help_includes_expected_flags(capsys):
+    try:
+        main(["--help"])
+    except SystemExit as exc:
+        assert exc.code == 0
+    out = capsys.readouterr().out
+    for flag in ["--gui", "--dry-run", "--fake-providers", "--legacy-v14"]:
+        assert flag in out
