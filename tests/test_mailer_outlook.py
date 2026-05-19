@@ -22,9 +22,7 @@ def test_win32com_not_imported_at_module_import_time():
 def test_render_template_docx_with_ooxml_replaces_and_escapes(tmp_path: Path):
     source = tmp_path / "template.docx"
     _make_docx(source, "<w:t>Aaaaa Ttttt</w:t>")
-
-    mailer = OutlookMailer()
-    rendered = mailer._render_template_docx_with_ooxml(source, {"Aaaaa": "Li", "Ttttt": "Title & Value"})
+    rendered = OutlookMailer()._render_template_docx_with_ooxml(source, {"Aaaaa": "Li", "Ttttt": "Title & Value"})
     try:
         with zipfile.ZipFile(rendered, "r") as zf:
             content = zf.read("word/document.xml").decode("utf-8")
@@ -37,30 +35,63 @@ def test_render_template_docx_with_ooxml_replaces_and_escapes(tmp_path: Path):
 def test_remaining_placeholders_detected(tmp_path: Path):
     source = tmp_path / "template.docx"
     _make_docx(source, "<w:t>Aaaaa Dddddin</w:t>")
-
-    remaining = OutlookMailer()._remaining_placeholders_in_docx(source, {"Aaaaa": "Li", "Dddddin": "x"})
-    assert remaining == ["Aaaaa", "Dddddin"]
+    assert OutlookMailer()._remaining_placeholders_in_docx(source, {"Aaaaa": "Li"}) == ["Aaaaa", "Dddddin"]
 
 
-def test_apply_formatted_body_uses_copy_paste_path(monkeypatch, tmp_path: Path):
-    copied = {"copy": 0, "paste": 0, "opened": None}
+def test_replace_placeholders_in_range_uses_replace_all():
+    calls = []
+
+    class FakeReplacement:
+        def ClearFormatting(self):
+            return None
+
+    class FakeFind:
+        Replacement = FakeReplacement()
+
+        def ClearFormatting(self):
+            return None
+
+        def Execute(self, **kwargs):
+            calls.append(kwargs)
+
+    mailer = OutlookMailer()
+    mailer._replace_placeholders_in_range(types.SimpleNamespace(Find=FakeFind()), {"Aaaaa": "Li"})
+    assert calls and calls[0]["Replace"] == 2
+
+
+def test_apply_formatted_body_word_first_success_no_fallback(monkeypatch, tmp_path: Path):
     source = tmp_path / "template.docx"
-    _make_docx(source, "<w:t>Aaaaa Ttttt</w:t>")
+    _make_docx(source, "<w:t>Aaaaa</w:t>")
+    copied = {"copy": 0, "paste": 0, "opened": []}
 
-    class FakeContent:
+    class FakeRange:
+        def __init__(self, text):
+            self.Text = text
+            self.NextStoryRange = None
+            self.Find = types.SimpleNamespace(
+                ClearFormatting=lambda: None,
+                Replacement=types.SimpleNamespace(ClearFormatting=lambda: None),
+                Execute=lambda **_: None,
+            )
+
         def Copy(self):
-            copied["copy"] += 1
+            return None
 
     class FakeDoc:
         def __init__(self):
-            self.Content = FakeContent()
+            self.Content = FakeRange("clean")
+            second = FakeRange("story2")
+            first = FakeRange("story1")
+            first.NextStoryRange = second
+            self.StoryRanges = [first]
+            self.Shapes = [types.SimpleNamespace(TextFrame=types.SimpleNamespace(HasText=True, TextRange=FakeRange("shape")))]
 
         def Close(self, _):
             return None
 
     class FakeDocuments:
-        def Open(self, opened_path):
-            copied["opened"] = opened_path
+        def Open(self, p):
+            copied["opened"].append(p)
             return FakeDoc()
 
     class FakeWord:
@@ -71,54 +102,56 @@ def test_apply_formatted_body_uses_copy_paste_path(monkeypatch, tmp_path: Path):
         def Quit(self):
             return None
 
-    class FakeWordEditor:
-        class FakeRange:
-            def Paste(self_inner):
-                copied["paste"] += 1
-
-        def Range(self, _start, _end):
-            return self.FakeRange()
-
-    class FakeInspector:
-        WordEditor = FakeWordEditor()
-
-    class FakeMail:
-        GetInspector = FakeInspector()
-
     class FakeWin32Client:
         @staticmethod
-        def Dispatch(name):
-            assert name == "Word.Application"
+        def Dispatch(_name):
             return FakeWord()
 
-    fake_win32 = types.SimpleNamespace(client=FakeWin32Client)
-    monkeypatch.setitem(sys.modules, "win32com", fake_win32)
+    class FakeEditor:
+        def Range(self, _a, _b):
+            return types.SimpleNamespace(Paste=lambda: copied.__setitem__("paste", copied["paste"] + 1))
+
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=FakeWin32Client))
     monkeypatch.setitem(sys.modules, "win32com.client", FakeWin32Client)
 
     mailer = OutlookMailer()
-    draft = DraftMessage(
-        to_email="to@example.com",
-        cc_email="",
-        subject="s",
-        template_path=source,
-        placeholders={"Aaaaa": "Li", "Ttttt": "Title"},
+    monkeypatch.setattr(mailer, "_render_template_docx_with_ooxml", lambda *_: pytest.fail("fallback should not be called"))
+    monkeypatch.setattr(
+        mailer,
+        "_replace_placeholders_in_range",
+        lambda rng, _p: copied.__setitem__("copy", copied["copy"] + (1 if rng is not None else 0)),
     )
-    mailer._apply_formatted_body_via_word_com(FakeMail(), draft)
 
-    assert copied["copy"] == 1
+    draft = DraftMessage("to@example.com", "", "s", template_path=source, placeholders={"Aaaaa": "Li"})
+    mailer._apply_formatted_body_via_word_com(types.SimpleNamespace(GetInspector=types.SimpleNamespace(WordEditor=FakeEditor())), draft)
+    assert len(copied["opened"]) == 1
     assert copied["paste"] == 1
-    assert copied["opened"] is not None
-    assert Path(copied["opened"]) != source
+    assert copied["copy"] >= 4
 
 
-def test_apply_formatted_body_raises_when_placeholder_remains(monkeypatch, tmp_path: Path):
+def test_apply_formatted_body_uses_fallback_when_word_still_has_placeholders(monkeypatch, tmp_path: Path):
     source = tmp_path / "template.docx"
-    _make_docx(source, "<w:t>Aaaaa</w:t><w:t>Dddddin</w:t>")
+    rendered = tmp_path / "rendered.docx"
+    _make_docx(source, "<w:t>Aaaaa</w:t>")
+    _make_docx(rendered, "<w:t>done</w:t>")
+    opens = []
+
+    class FakeDoc:
+        def __init__(self):
+            self.Content = types.SimpleNamespace(Copy=lambda: None)
+
+        def Close(self, _):
+            return None
+
+    class FakeDocuments:
+        def Open(self, p):
+            opens.append(Path(p))
+            return FakeDoc()
 
     class FakeWord:
         def __init__(self):
             self.Visible = False
-            self.Documents = types.SimpleNamespace(Open=lambda _: None)
+            self.Documents = FakeDocuments()
 
         def Quit(self):
             return None
@@ -128,13 +161,55 @@ def test_apply_formatted_body_raises_when_placeholder_remains(monkeypatch, tmp_p
         def Dispatch(_name):
             return FakeWord()
 
-    fake_win32 = types.SimpleNamespace(client=FakeWin32Client)
-    monkeypatch.setitem(sys.modules, "win32com", fake_win32)
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=FakeWin32Client))
     monkeypatch.setitem(sys.modules, "win32com.client", FakeWin32Client)
 
-    draft = DraftMessage("to@example.com", "", "s", template_path=source, placeholders={"Aaaaa": "Li"})
-    with pytest.raises(RuntimeError, match="Template placeholders were not fully replaced: Dddddin"):
-        OutlookMailer()._apply_formatted_body_via_word_com(types.SimpleNamespace(GetInspector=None), draft)
+    mailer = OutlookMailer()
+    monkeypatch.setattr(mailer, "_render_template_docx_with_ooxml", lambda *_: rendered)
+    states = iter([["Aaaaa"], []])
+    monkeypatch.setattr(mailer, "_replace_placeholders_in_word_doc", lambda *_: None)
+    monkeypatch.setattr(mailer, "_remaining_placeholders_in_word_doc", lambda _doc: next(states))
+    monkeypatch.setattr(mailer, "_remaining_placeholders_in_docx", lambda *_: [])
+    mailer._apply_formatted_body_via_word_com(
+        types.SimpleNamespace(GetInspector=types.SimpleNamespace(WordEditor=types.SimpleNamespace(Range=lambda *_: types.SimpleNamespace(Paste=lambda: None)))),
+        DraftMessage("to@example.com", "", "s", source, {"Aaaaa": "Li"}),
+    )
+    assert opens[0] == source
+    assert opens[1] == rendered
+
+
+def test_apply_formatted_body_raises_when_still_remaining_after_fallback(monkeypatch, tmp_path: Path):
+    source = tmp_path / "template.docx"
+    rendered = tmp_path / "rendered.docx"
+    _make_docx(source, "<w:t>Aaaaa</w:t>")
+    _make_docx(rendered, "<w:t>Aaaaa</w:t>")
+
+    class FakeWord:
+        def __init__(self):
+            self.Visible = False
+            self.Documents = types.SimpleNamespace(Open=lambda *_: types.SimpleNamespace(Content=types.SimpleNamespace(Copy=lambda: None), Close=lambda *_: None))
+
+        def Quit(self):
+            return None
+
+    class FakeWin32Client:
+        @staticmethod
+        def Dispatch(_name):
+            return FakeWord()
+
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=FakeWin32Client))
+    monkeypatch.setitem(sys.modules, "win32com.client", FakeWin32Client)
+
+    mailer = OutlookMailer()
+    monkeypatch.setattr(mailer, "_render_template_docx_with_ooxml", lambda *_: rendered)
+    monkeypatch.setattr(mailer, "_replace_placeholders_in_word_doc", lambda *_: None)
+    monkeypatch.setattr(mailer, "_remaining_placeholders_in_word_doc", lambda _doc: ["Aaaaa"])
+    monkeypatch.setattr(mailer, "_remaining_placeholders_in_docx", lambda *_: ["Aaaaa"])
+    with pytest.raises(RuntimeError, match="Template placeholders were not fully replaced: Aaaaa"):
+        mailer._apply_formatted_body_via_word_com(
+            types.SimpleNamespace(GetInspector=types.SimpleNamespace(WordEditor=types.SimpleNamespace(Range=lambda *_: types.SimpleNamespace(Paste=lambda: None)))),
+            DraftMessage("to@example.com", "", "s", source, {"Aaaaa": "Li"}),
+        )
 
 
 def test_confirmation_happens_before_send_with_fake_mailer():
