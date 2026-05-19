@@ -14,9 +14,12 @@
 12. Verify current-row invitation creates formatted Outlook draft/send flow.
 13. Verify cancel in confirmation dialog does not send and does not write date.
 14. Verify confirmed successful send writes `Date of Invitaion` only after send success.
-15. Verify already-invited row is skipped.
-16. Verify `Manual Decision = No` row is skipped.
-17. Verify BatchInvitation requests confirmation per row.
+15. If the Outlook draft still contains placeholders, do **not** send.
+16. Capture and report exactly which placeholders remain (for example: `Aaaaa`, `Ttttt`).
+17. Intended production path: Word-first replacement with OOXML fallback if placeholders remain.
+18. Verify already-invited row is skipped.
+19. Verify `Manual Decision = No` row is skipped.
+20. Verify BatchInvitation requests confirmation per row.
 
 Recommended commands:
 ```powershell

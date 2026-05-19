@@ -64,5 +64,6 @@ def test_rendered_invitation_includes_template_path_and_placeholders():
         {"Manual Decision": "Insight", "Overseas": "Yes"},
         date(2026, 5, 16),
     )
+    assert rendered.template_path.is_absolute()
     assert rendered.template_path.name == "NB_Template_Insight.docx"
     assert rendered.placeholders["Pppppno"].startswith("For invited authors")
