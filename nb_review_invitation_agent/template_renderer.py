@@ -99,7 +99,7 @@ class TemplateRenderer:
     def render_for_row(self, row_values: dict[str, str], today: date) -> RenderedInvitation:
         choice = select_template_and_subject(row_values)
         placeholders = build_placeholder_map(row_values, today)
-        template_path = self.templates_dir / choice.template_name
+        template_path = (self.templates_dir / choice.template_name).resolve()
         if not template_path.exists():
             raise FileNotFoundError(f"Template not found: {template_path}")
 

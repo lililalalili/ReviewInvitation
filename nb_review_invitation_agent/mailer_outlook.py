@@ -63,16 +63,44 @@ class OutlookMailer:
     def _apply_formatted_body_via_word_com(self, mail, draft: DraftMessage) -> None:  # pragma: no cover - windows-only
         import win32com.client  # type: ignore[import-not-found]
 
+        wd_find_continue = 1
+        wd_replace_all = 2
+        wd_story = 6
+
         word = win32com.client.Dispatch("Word.Application")
         word.Visible = False
         doc = None
         try:
             doc = word.Documents.Open(str(draft.template_path))
+
             for key, value in draft.placeholders.items():
-                find = doc.Content.Find
-                find.ClearFormatting()
-                find.Replacement.ClearFormatting()
-                find.Execute(FindText=key, ReplaceWith=value, Replace=2)
+                replacement = "" if value is None else str(value)
+
+                # Prefer Word Selection.Find in real Word COM. It is more reliable
+                # for ReplaceAll than doc.Content.Find in some pywin32/Word cases.
+                selection = getattr(word, "Selection", None)
+                if selection is not None:
+                    selection.HomeKey(Unit=wd_story)
+                    find = selection.Find
+                    find.ClearFormatting()
+                    find.Replacement.ClearFormatting()
+                    find.Text = key
+                    find.Replacement.Text = replacement
+                    find.Forward = True
+                    find.Wrap = wd_find_continue
+                    find.Format = False
+                    find.MatchCase = False
+                    find.MatchWholeWord = False
+                    find.MatchWildcards = False
+                    find.MatchSoundsLike = False
+                    find.MatchAllWordForms = False
+                    find.Execute(Replace=wd_replace_all)
+                else:
+                    # CI/fake-COM fallback used by tests.
+                    find = doc.Content.Find
+                    find.ClearFormatting()
+                    find.Replacement.ClearFormatting()
+                    find.Execute(FindText=key, ReplaceWith=replacement, Replace=wd_replace_all)
 
             doc.Content.Copy()
             inspector = mail.GetInspector
