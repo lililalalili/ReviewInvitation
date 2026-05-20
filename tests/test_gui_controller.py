@@ -1,3 +1,4 @@
+import pytest
 from openpyxl import Workbook
 
 from nb_review_invitation_agent.gui_controller import (
@@ -73,3 +74,14 @@ def test_editable_fields_update_and_readonly_not_written(tmp_path):
 
 def test_link_builders():
     assert build_email_search_url("a+b@example.edu") == "https://www.bing.com/search?q=a%2Bb%40example.edu"
+
+
+def test_save_workbook_permission_error_message(monkeypatch, tmp_path):
+    c = make_controller()
+
+    def _raise(_):
+        raise PermissionError("[Errno 13] Permission denied")
+
+    monkeypatch.setattr(c.workbook, "save", _raise)
+    with pytest.raises(RuntimeError, match="Please close NB_Author_2026.xlsm"):
+        c.save_workbook(tmp_path / "x.xlsm")

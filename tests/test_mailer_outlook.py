@@ -59,7 +59,7 @@ def test_replace_placeholders_in_range_uses_replace_all():
     assert calls and calls[0]["Replace"] == 2
 
 
-def test_apply_formatted_body_word_first_success_no_fallback(monkeypatch, tmp_path: Path):
+def test_render_formatted_body_word_first_success_no_fallback(monkeypatch, tmp_path: Path):
     source = tmp_path / "template.docx"
     _make_docx(source, "<w:t>Aaaaa</w:t>")
     copied = {"copy": 0, "paste": 0, "opened": []}
@@ -123,13 +123,12 @@ def test_apply_formatted_body_word_first_success_no_fallback(monkeypatch, tmp_pa
     )
 
     draft = DraftMessage("to@example.com", "", "s", template_path=source, placeholders={"Aaaaa": "Li"})
-    mailer._apply_formatted_body_via_word_com(types.SimpleNamespace(GetInspector=types.SimpleNamespace(WordEditor=FakeEditor())), draft)
+    mailer._render_formatted_body_to_clipboard_via_word_com(draft)
     assert len(copied["opened"]) == 1
-    assert copied["paste"] == 1
     assert copied["copy"] >= 4
 
 
-def test_apply_formatted_body_uses_fallback_when_word_still_has_placeholders(monkeypatch, tmp_path: Path):
+def test_render_formatted_body_uses_fallback_when_word_still_has_placeholders(monkeypatch, tmp_path: Path):
     source = tmp_path / "template.docx"
     rendered = tmp_path / "rendered.docx"
     _make_docx(source, "<w:t>Aaaaa</w:t>")
@@ -170,15 +169,12 @@ def test_apply_formatted_body_uses_fallback_when_word_still_has_placeholders(mon
     monkeypatch.setattr(mailer, "_replace_placeholders_in_word_doc", lambda *_: None)
     monkeypatch.setattr(mailer, "_remaining_placeholders_in_word_doc", lambda _doc: next(states))
     monkeypatch.setattr(mailer, "_remaining_placeholders_in_docx", lambda *_: [])
-    mailer._apply_formatted_body_via_word_com(
-        types.SimpleNamespace(GetInspector=types.SimpleNamespace(WordEditor=types.SimpleNamespace(Range=lambda *_: types.SimpleNamespace(Paste=lambda: None)))),
-        DraftMessage("to@example.com", "", "s", source, {"Aaaaa": "Li"}),
-    )
+    mailer._render_formatted_body_to_clipboard_via_word_com(DraftMessage("to@example.com", "", "s", source, {"Aaaaa": "Li"}))
     assert opens[0] == source
     assert opens[1] == rendered
 
 
-def test_apply_formatted_body_raises_when_still_remaining_after_fallback(monkeypatch, tmp_path: Path):
+def test_render_formatted_body_raises_when_still_remaining_after_fallback(monkeypatch, tmp_path: Path):
     source = tmp_path / "template.docx"
     rendered = tmp_path / "rendered.docx"
     _make_docx(source, "<w:t>Aaaaa</w:t>")
@@ -206,10 +202,7 @@ def test_apply_formatted_body_raises_when_still_remaining_after_fallback(monkeyp
     monkeypatch.setattr(mailer, "_remaining_placeholders_in_word_doc", lambda _doc: ["Aaaaa"])
     monkeypatch.setattr(mailer, "_remaining_placeholders_in_docx", lambda *_: ["Aaaaa"])
     with pytest.raises(RuntimeError, match="Template placeholders were not fully replaced: Aaaaa"):
-        mailer._apply_formatted_body_via_word_com(
-            types.SimpleNamespace(GetInspector=types.SimpleNamespace(WordEditor=types.SimpleNamespace(Range=lambda *_: types.SimpleNamespace(Paste=lambda: None)))),
-            DraftMessage("to@example.com", "", "s", source, {"Aaaaa": "Li"}),
-        )
+        mailer._render_formatted_body_to_clipboard_via_word_com(DraftMessage("to@example.com", "", "s", source, {"Aaaaa": "Li"}))
 
 
 def test_confirmation_happens_before_send_with_fake_mailer():
@@ -228,3 +221,87 @@ def test_confirmation_happens_before_send_with_fake_mailer():
     assert m.create_draft_and_maybe_send(d, lambda _: False) is False
     assert calls["confirm"] == 1
     assert calls["send"] == 0
+
+def test_create_draft_displays_only_after_render_success(monkeypatch, tmp_path: Path):
+    calls = []
+
+    class Account:
+        SmtpAddress = "nsb@ion.ac.cn"
+
+    class Mail:
+        def __init__(self):
+            self.To = self.CC = self.Subject = ""
+            self.SendUsingAccount = None
+
+        def Display(self):
+            calls.append("display")
+
+        def Send(self):
+            calls.append("send")
+
+    class Outlook:
+        def GetNamespace(self, _):
+            return types.SimpleNamespace(Accounts=[Account()])
+
+        def CreateItem(self, _):
+            return Mail()
+
+    class FakeWin32Client:
+        @staticmethod
+        def Dispatch(_name):
+            return Outlook()
+
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=FakeWin32Client))
+    monkeypatch.setitem(sys.modules, "win32com.client", FakeWin32Client)
+
+    mailer = OutlookMailer()
+    monkeypatch.setattr(mailer, "_is_windows", lambda: True)
+    monkeypatch.setattr(mailer, "_render_formatted_body_to_clipboard_via_word_com", lambda _d: calls.append("render"))
+    monkeypatch.setattr(mailer, "_paste_clipboard_into_mail", lambda _m: calls.append("paste"))
+
+    sent = mailer.create_draft_and_maybe_send(DraftMessage("to@example.com", "", "s", tmp_path / "x.docx", {}), lambda _: True)
+    assert sent is True
+    assert calls[:3] == ["render", "display", "paste"]
+
+
+def test_create_draft_does_not_display_when_render_fails(monkeypatch, tmp_path: Path):
+    calls = []
+
+    class Account:
+        SmtpAddress = "nsb@ion.ac.cn"
+
+    class Mail:
+        def Display(self):
+            calls.append("display")
+
+    class Outlook:
+        def GetNamespace(self, _):
+            return types.SimpleNamespace(Accounts=[Account()])
+
+        def CreateItem(self, _):
+            return Mail()
+
+    class FakeWin32Client:
+        @staticmethod
+        def Dispatch(_name):
+            return Outlook()
+
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=FakeWin32Client))
+    monkeypatch.setitem(sys.modules, "win32com.client", FakeWin32Client)
+
+    mailer = OutlookMailer()
+    monkeypatch.setattr(mailer, "_is_windows", lambda: True)
+    monkeypatch.setattr(mailer, "_render_formatted_body_to_clipboard_via_word_com", lambda _d: (_ for _ in ()).throw(RuntimeError("Template placeholders were not fully replaced: Aaaaa")))
+    with pytest.raises(RuntimeError, match="Template placeholders"):
+        mailer.create_draft_and_maybe_send(DraftMessage("to@example.com", "", "s", tmp_path / "x.docx", {}), lambda _: True)
+    assert calls == []
+
+
+def test_ooxml_fallback_replaces_split_placeholder_runs(tmp_path: Path):
+    source = tmp_path / "template.docx"
+    _make_docx(source, '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:t>Aaa</w:t><w:t>aa</w:t></w:document>')
+    rendered = OutlookMailer()._render_template_docx_with_ooxml(source, {"Aaaaa": "Li"})
+    try:
+        assert OutlookMailer()._remaining_placeholders_in_docx(rendered, {"Aaaaa": "Li"}) == []
+    finally:
+        rendered.unlink(missing_ok=True)

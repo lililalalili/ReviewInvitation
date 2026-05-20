@@ -45,6 +45,11 @@ class InvitationService:
             return InvitationResult("Error", "无法发送：controller.save_path 未设置", row_number, recipient=recipient)
 
         try:
+            self.controller.save_workbook(save_path)
+        except Exception as exc:
+            return InvitationResult("Error", str(exc), row_number, recipient=recipient)
+
+        try:
             rendered = self.renderer.render_for_row(rv, self.today_provider())
         except Exception as exc:
             return InvitationResult("Error", str(exc), row_number, recipient=recipient)

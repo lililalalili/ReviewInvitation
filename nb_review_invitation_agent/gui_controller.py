@@ -152,7 +152,14 @@ class WorkbookReviewController:
             self.current_index = len(rows) - 1
 
     def save_workbook(self, path: str | Path) -> None:
-        self.workbook.save(path)
+        try:
+            self.workbook.save(path)
+        except PermissionError as exc:
+            raise RuntimeError("Failed to save workbook. Please close NB_Author_2026.xlsm in Excel and try again.") from exc
+        except OSError as exc:
+            if getattr(exc, "errno", None) == 13:
+                raise RuntimeError("Failed to save workbook. Please close NB_Author_2026.xlsm in Excel and try again.") from exc
+            raise
 
     def set_row_value(self, row_number: int, field: str, value: str) -> None:
         col = self.header_map.get(field)

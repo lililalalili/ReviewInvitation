@@ -4,8 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 import tempfile
 from typing import Protocol
-from xml.sax.saxutils import escape
 import zipfile
+import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape
 
 
 KNOWN_PLACEHOLDERS = (
@@ -58,11 +59,13 @@ class OutlookMailer:
         mail.CC = draft.cc_email
         mail.Subject = draft.subject
         mail.SendUsingAccount = sender
-        mail.Display()
         if self._is_windows():
-            self._apply_formatted_body_via_word_com(mail, draft)
+            self._render_formatted_body_to_clipboard_via_word_com(draft)
+            mail.Display()
+            self._paste_clipboard_into_mail(mail)
         else:
             mail.Body = draft.body_text or ""
+            mail.Display()
 
         if not confirm("确认发送邮件？"):
             return False
@@ -141,6 +144,22 @@ class OutlookMailer:
         remaining = sorted({k for k in known_placeholders if any(k in text for text in haystacks)})
         return remaining
 
+    def _replace_placeholder_across_text_nodes(self, text_nodes: list[ET.Element], placeholder: str, replacement: str) -> None:
+        if not text_nodes:
+            return
+        full_text = "".join(node.text or "" for node in text_nodes)
+        if placeholder not in full_text:
+            return
+        replaced = full_text.replace(placeholder, replacement)
+        cursor = 0
+        for idx, node in enumerate(text_nodes):
+            original_len = len(node.text or "")
+            if idx == len(text_nodes) - 1:
+                node.text = replaced[cursor:]
+            else:
+                node.text = replaced[cursor : cursor + original_len]
+                cursor += original_len
+
     def _render_template_docx_with_ooxml(self, template_path: Path, placeholders: dict[str, str]) -> Path:
         temp_file = tempfile.NamedTemporaryFile(prefix="nb_rendered_", suffix=".docx", delete=False)
         temp_path = Path(temp_file.name)
@@ -151,9 +170,20 @@ class OutlookMailer:
                 content = source_zip.read(item.filename)
                 if item.filename.startswith("word/") and item.filename.endswith(".xml"):
                     xml_text = content.decode("utf-8")
-                    for key, value in placeholders.items():
-                        xml_text = xml_text.replace(key, escape("" if value is None else str(value), {'"': '&quot;', "'": '&apos;'}))
-                    content = xml_text.encode("utf-8")
+                    try:
+                        root = ET.fromstring(xml_text)
+                        text_nodes = [
+                            node
+                            for node in root.iter()
+                            if node.tag.endswith("}t") and (node.tag.startswith("{") or node.tag == "t")
+                        ]
+                        for key, value in placeholders.items():
+                            self._replace_placeholder_across_text_nodes(text_nodes, key, "" if value is None else str(value))
+                        content = ET.tostring(root, encoding="utf-8", xml_declaration=xml_text.startswith("<?xml"))
+                    except ET.ParseError:
+                        for key, value in placeholders.items():
+                            xml_text = xml_text.replace(key, escape("" if value is None else str(value), {'"': '&quot;', "'": '&apos;'}))
+                        content = xml_text.encode("utf-8")
                 dest_zip.writestr(item, content)
 
         return temp_path
@@ -173,7 +203,12 @@ class OutlookMailer:
 
         return sorted(remaining)
 
-    def _apply_formatted_body_via_word_com(self, mail, draft: DraftMessage) -> None:  # pragma: no cover - windows-only
+    def _paste_clipboard_into_mail(self, mail) -> None:
+        inspector = mail.GetInspector
+        editor = inspector.WordEditor
+        editor.Range(0, 0).Paste()
+
+    def _render_formatted_body_to_clipboard_via_word_com(self, draft: DraftMessage) -> None:  # pragma: no cover - windows-only
         import win32com.client  # type: ignore[import-not-found]
 
         word = win32com.client.Dispatch("Word.Application")
@@ -198,9 +233,6 @@ class OutlookMailer:
                     raise RuntimeError(f"Template placeholders were not fully replaced: {', '.join(remaining)}")
 
             doc.Content.Copy()
-            inspector = mail.GetInspector
-            editor = inspector.WordEditor
-            editor.Range(0, 0).Paste()
         finally:
             if doc is not None:
                 doc.Close(False)
