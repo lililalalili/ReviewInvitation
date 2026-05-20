@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 import tempfile
@@ -22,6 +23,10 @@ KNOWN_PLACEHOLDERS = (
 )
 TEXT_NODE_PATTERN = re.compile(r"(<(?P<tag>w:t|a:t)\b[^>]*>)(?P<text>.*?)(</(?P=tag)>)", re.DOTALL)
 WD_FORMAT_FILTERED_HTML = 10
+OL_FOLDER_DRAFTS = 16
+OL_FOLDER_SENT_MAIL = 5
+DEFAULT_OUTLOOK_SEND_ACCOUNT = "nsb@ion.ac.cn"
+DEFAULT_OUTLOOK_FORCE_FROM_ADDRESS = "nsb@ion.ac.cn"
 
 
 @dataclass
@@ -47,25 +52,25 @@ class OutlookMailer:
 
         outlook = win32com.client.Dispatch("Outlook.Application")
         namespace = outlook.GetNamespace("MAPI")
+        send_account_address = os.getenv("OUTLOOK_SEND_ACCOUNT", DEFAULT_OUTLOOK_SEND_ACCOUNT).strip()
+        force_from_address = os.getenv("OUTLOOK_FORCE_FROM_ADDRESS", DEFAULT_OUTLOOK_FORCE_FROM_ADDRESS).strip()
 
-        sender = None
-        for account in namespace.Accounts:
-            smtp = str(getattr(account, "SmtpAddress", "")).strip().lower()
-            if smtp == "nsb@ion.ac.cn":
-                sender = account
-                break
+        sender = self._select_sender_account(namespace, send_account_address)
         if sender is None:
-            raise RuntimeError("Outlook account nsb@ion.ac.cn not found")
+            raise RuntimeError(f"Outlook account {send_account_address} not found")
 
         rendered_html = self._render_template_to_filtered_html_via_word_com(draft) if self._is_windows() else (draft.body_text or "")
         if not self._is_windows() and len(rendered_html.strip()) <= 20:
             raise RuntimeError("Rendered email body is empty.")
 
-        mail = outlook.CreateItem(0)
+        mail = self._create_mail_item_for_account(outlook, sender)
+        self._bind_save_sent_folder(mail, sender)
+
         mail.To = draft.to_email
         mail.CC = draft.cc_email
         mail.Subject = draft.subject
         mail.SendUsingAccount = sender
+        self._set_sent_on_behalf_of(mail, force_from_address)
         mail.HTMLBody = rendered_html
         self._validate_outlook_body(mail)
         mail.Display()
@@ -76,11 +81,43 @@ class OutlookMailer:
         mail.Send()
         return True
 
+    def _select_sender_account(self, namespace, send_account_address: str):
+        for account in namespace.Accounts:
+            smtp = str(getattr(account, "SmtpAddress", "")).strip().lower()
+            if smtp == send_account_address.lower():
+                return account
+        return None
+
+    def _create_mail_item_for_account(self, outlook, sender):
+        try:
+            store = sender.DeliveryStore
+            drafts = store.GetDefaultFolder(OL_FOLDER_DRAFTS)
+            return drafts.Items.Add("IPM.Note")
+        except Exception:
+            return outlook.CreateItem(0)
+
+    def _bind_save_sent_folder(self, mail, sender) -> None:
+        try:
+            store = sender.DeliveryStore
+            sent = store.GetDefaultFolder(OL_FOLDER_SENT_MAIL)
+            mail.SaveSentMessageFolder = sent
+        except Exception:
+            return None
+
+    def _set_sent_on_behalf_of(self, mail, force_from_address: str) -> None:
+        if not force_from_address:
+            return
+        try:
+            mail.SentOnBehalfOfName = force_from_address
+        except Exception as exc:
+            raise RuntimeError(f"Unable to set Outlook sender identity to {force_from_address} via SentOnBehalfOfName.") from exc
+
     def _is_windows(self) -> bool:
         import platform
 
         return platform.system().lower().startswith("win")
 
+    # ... rest unchanged
     def _replace_placeholders_in_range(self, word_range, placeholders: dict[str, str]) -> None:
         wd_find_continue = 1
         wd_replace_all = 2
@@ -156,7 +193,6 @@ class OutlookMailer:
 
     def _render_template_to_filtered_html_via_word_com(self, draft: DraftMessage) -> str:  # pragma: no cover - windows-only
         import win32com.client  # type: ignore[import-not-found]
-
         word = win32com.client.Dispatch("Word.Application")
         word.Visible = False
         doc = None
@@ -170,16 +206,13 @@ class OutlookMailer:
                 doc.Close(False)
                 doc = None
                 rendered_template_path = self._render_template_docx_with_ooxml(draft.template_path, draft.placeholders)
-                if self._remaining_placeholders_in_docx(rendered_template_path, draft.placeholders):
-                    raise RuntimeError(f"Rendered email body still contains placeholders: {', '.join(self._remaining_placeholders_in_docx(rendered_template_path, draft.placeholders))}")
-                try:
-                    doc = word.Documents.Open(str(rendered_template_path))
-                except Exception as exc:
-                    raise RuntimeError("Rendered Word template could not be opened. The generated document may be invalid.") from exc
+                rem2 = self._remaining_placeholders_in_docx(rendered_template_path, draft.placeholders)
+                if rem2:
+                    raise RuntimeError(f"Rendered email body still contains placeholders: {', '.join(rem2)}")
+                doc = word.Documents.Open(str(rendered_template_path))
                 remaining = self._remaining_placeholders_in_word_doc(doc)
                 if remaining:
                     raise RuntimeError(f"Rendered email body still contains placeholders: {', '.join(remaining)}")
-
             text = str(getattr(doc.Content, "Text", "") or "")
             if len(text.strip()) <= 20:
                 raise RuntimeError("Rendered email body is empty.")
@@ -196,7 +229,6 @@ class OutlookMailer:
             if temp_html_path is not None:
                 temp_html_path.unlink(missing_ok=True)
 
-    # optional fallback retained
     def _paste_clipboard_into_mail(self, mail) -> None:
         inspector = mail.GetInspector
         editor = inspector.WordEditor
@@ -216,7 +248,7 @@ class OutlookMailer:
         full_text = "".join(str(node["text"]) for node in nodes)
         for key, value in placeholders.items():
             full_text = full_text.replace(key, "" if value is None else str(value))
-        rendered_node_texts = []
+        rendered_node_texts: list[str] = []
         cursor = 0
         for index, node in enumerate(nodes):
             source_len = len(str(node["text"]))
@@ -225,7 +257,7 @@ class OutlookMailer:
             else:
                 rendered_node_texts.append(full_text[cursor : cursor + source_len])
                 cursor += source_len
-        chunks = []
+        chunks: list[str] = []
         last = 0
         for node, replacement_text in zip(nodes, rendered_node_texts):
             start, end = int(node["start"]), int(node["end"])

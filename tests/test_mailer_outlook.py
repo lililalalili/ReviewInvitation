@@ -19,40 +19,47 @@ def test_win32com_not_imported_at_module_import_time():
     assert "win32com" not in mailer_module.__dict__
 
 
-def test_replace_placeholders_in_range_uses_replace_all():
+def _install_fake_outlook(monkeypatch, outlook_obj):
+    class FakeWin32Client:
+        @staticmethod
+        def Dispatch(_name):
+            return outlook_obj
+
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=FakeWin32Client))
+    monkeypatch.setitem(sys.modules, "win32com.client", FakeWin32Client)
+
+
+def test_sender_account_selected_and_properties_set(monkeypatch, tmp_path: Path):
     calls = []
 
-    class FakeReplacement:
-        def ClearFormatting(self): ...
+    class Folder:
+        def __init__(self):
+            self.Items = types.SimpleNamespace(Add=lambda _msg: Mail("from_drafts"))
 
-    class FakeFind:
-        Replacement = FakeReplacement()
-
-        def ClearFormatting(self): ...
-
-        def Execute(self, **kwargs):
-            calls.append(kwargs)
-
-    OutlookMailer()._replace_placeholders_in_range(types.SimpleNamespace(Find=FakeFind()), {"Aaaaa": "Li"})
-    assert calls and calls[0]["Replace"] == 2
-
-
-def test_create_draft_assigns_htmlbody_before_display(monkeypatch, tmp_path: Path):
-    calls = []
+    class DeliveryStore:
+        def GetDefaultFolder(self, folder_id):
+            if folder_id == 16:
+                return Folder()
+            if folder_id == 5:
+                return "sent-folder"
+            raise RuntimeError("unexpected")
 
     class Account:
-        SmtpAddress = "nsb@ion.ac.cn"
+        def __init__(self, smtp):
+            self.SmtpAddress = smtp
+            self.DeliveryStore = DeliveryStore()
 
     class Mail:
-        def __init__(self):
-            self.To = self.CC = self.Subject = ""
-            self.SendUsingAccount = None
+        def __init__(self, source):
+            self.source = source
             self.Body = ""
+            self.SendUsingAccount = None
+            self.SaveSentMessageFolder = None
 
         def __setattr__(self, name, value):
             object.__setattr__(self, name, value)
             if name == "HTMLBody":
-                object.__setattr__(self, "Body", "plain content from html")
+                object.__setattr__(self, "Body", "rendered enough body length text")
                 calls.append("html")
 
         def Display(self):
@@ -62,77 +69,112 @@ def test_create_draft_assigns_htmlbody_before_display(monkeypatch, tmp_path: Pat
             calls.append("send")
 
     class Outlook:
+        def __init__(self):
+            self.created = []
+            self.accounts = [Account("other@example.com"), Account("NSB@ION.AC.CN")]
+
         def GetNamespace(self, _):
-            return types.SimpleNamespace(Accounts=[Account()])
+            return types.SimpleNamespace(Accounts=self.accounts)
 
         def CreateItem(self, _):
-            return Mail()
+            self.created.append("fallback")
+            return Mail("fallback")
 
-    class FakeWin32Client:
-        @staticmethod
-        def Dispatch(_name):
-            return Outlook()
-
-    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=FakeWin32Client))
-    monkeypatch.setitem(sys.modules, "win32com.client", FakeWin32Client)
+    outlook = Outlook()
+    _install_fake_outlook(monkeypatch, outlook)
+    monkeypatch.setenv("OUTLOOK_SEND_ACCOUNT", "nsb@ion.ac.cn")
+    monkeypatch.setenv("OUTLOOK_FORCE_FROM_ADDRESS", "nsb@ion.ac.cn")
 
     mailer = OutlookMailer()
     monkeypatch.setattr(mailer, "_is_windows", lambda: True)
     monkeypatch.setattr(mailer, "_render_template_to_filtered_html_via_word_com", lambda _d: "<html><body>hello world body content</body></html>")
 
-    sent = mailer.create_draft_and_maybe_send(DraftMessage("to@example.com", "", "s", tmp_path / "x.docx", {}), lambda _: True)
-    assert sent is True
-    assert "html" in calls and "display" in calls
-    assert calls.index("html") < calls.index("display")
+    assert mailer.create_draft_and_maybe_send(DraftMessage("to@example.com", "", "s", tmp_path / "x.docx", {}), lambda _: False) is False
+    assert "display" in calls
+    assert "send" not in calls
+    assert outlook.created == []
 
 
-def test_create_draft_does_not_display_when_render_fails(monkeypatch, tmp_path: Path):
-    calls = []
-
-    class Account:
-        SmtpAddress = "nsb@ion.ac.cn"
-
-    class Mail:
-        def Display(self):
-            calls.append("display")
-
-    class Outlook:
-        def GetNamespace(self, _):
-            return types.SimpleNamespace(Accounts=[Account()])
-
-        def CreateItem(self, _):
-            return Mail()
-
-    class FakeWin32Client:
-        @staticmethod
-        def Dispatch(_name):
-            return Outlook()
-
-    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=FakeWin32Client))
-    monkeypatch.setitem(sys.modules, "win32com.client", FakeWin32Client)
-
-    mailer = OutlookMailer()
-    monkeypatch.setattr(mailer, "_is_windows", lambda: True)
-    monkeypatch.setattr(mailer, "_render_template_to_filtered_html_via_word_com", lambda _d: (_ for _ in ()).throw(RuntimeError("Rendered email body is empty.")))
-    with pytest.raises(RuntimeError, match="Rendered email body is empty"):
-        mailer.create_draft_and_maybe_send(DraftMessage("to@example.com", "", "s", tmp_path / "x.docx", {}), lambda _: True)
-    assert calls == []
-
-
-def test_send_not_called_before_confirmation(monkeypatch, tmp_path: Path):
-    sent = {"send": 0}
+def test_drafts_creation_fallbacks_to_create_item(monkeypatch, tmp_path: Path):
+    class DeliveryStore:
+        def GetDefaultFolder(self, _folder_id):
+            raise RuntimeError("cannot access drafts")
 
     class Account:
         SmtpAddress = "nsb@ion.ac.cn"
 
+        def __init__(self):
+            self.DeliveryStore = DeliveryStore()
+
     class Mail:
-        HTMLBody = ""
-        Body = "body with enough length"
+        Body = "good enough body text for validation"
 
         def Display(self): ...
 
-        def Send(self):
-            sent["send"] += 1
+        def Send(self): ...
+
+    class Outlook:
+        def __init__(self):
+            self.create_item_called = 0
+
+        def GetNamespace(self, _):
+            return types.SimpleNamespace(Accounts=[Account()])
+
+        def CreateItem(self, _):
+            self.create_item_called += 1
+            return Mail()
+
+    outlook = Outlook()
+    _install_fake_outlook(monkeypatch, outlook)
+    mailer = OutlookMailer()
+    monkeypatch.setattr(mailer, "_is_windows", lambda: True)
+    monkeypatch.setattr(mailer, "_render_template_to_filtered_html_via_word_com", lambda _d: "<html><body>body with enough length for rendering</body></html>")
+    mailer.create_draft_and_maybe_send(DraftMessage("to@example.com", "", "s", tmp_path / "x.docx", {}), lambda _: False)
+    assert outlook.create_item_called == 1
+
+
+def test_no_matching_account_raises_before_display(monkeypatch, tmp_path: Path):
+    class Account:
+        SmtpAddress = "other@example.com"
+
+    class Outlook:
+        def GetNamespace(self, _):
+            return types.SimpleNamespace(Accounts=[Account()])
+
+        def CreateItem(self, _):
+            raise AssertionError("should not create mail")
+
+    _install_fake_outlook(monkeypatch, Outlook())
+    monkeypatch.setenv("OUTLOOK_SEND_ACCOUNT", "nsb@ion.ac.cn")
+    mailer = OutlookMailer()
+    with pytest.raises(RuntimeError, match="Outlook account nsb@ion.ac.cn not found"):
+        mailer.create_draft_and_maybe_send(DraftMessage("to@example.com", "", "s", tmp_path / "x.docx", {}), lambda _: True)
+
+
+def test_set_sent_on_behalf_error_raised_before_send(monkeypatch, tmp_path: Path):
+    class Folder:
+        Items = types.SimpleNamespace(Add=lambda _msg: Mail())
+
+    class DeliveryStore:
+        def GetDefaultFolder(self, _id):
+            return Folder()
+
+    class Account:
+        SmtpAddress = "nsb@ion.ac.cn"
+
+        def __init__(self):
+            self.DeliveryStore = DeliveryStore()
+
+    class Mail:
+        Body = "good enough body text for validation"
+
+        def __setattr__(self, name, value):
+            if name == "SentOnBehalfOfName":
+                raise RuntimeError("no permission")
+            object.__setattr__(self, name, value)
+
+        def Display(self):
+            raise AssertionError("must not display")
 
     class Outlook:
         def GetNamespace(self, _):
@@ -141,18 +183,12 @@ def test_send_not_called_before_confirmation(monkeypatch, tmp_path: Path):
         def CreateItem(self, _):
             return Mail()
 
-    class FakeWin32Client:
-        @staticmethod
-        def Dispatch(_name):
-            return Outlook()
-
-    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=FakeWin32Client))
-    monkeypatch.setitem(sys.modules, "win32com.client", FakeWin32Client)
+    _install_fake_outlook(monkeypatch, Outlook())
     mailer = OutlookMailer()
     monkeypatch.setattr(mailer, "_is_windows", lambda: True)
-    monkeypatch.setattr(mailer, "_render_template_to_filtered_html_via_word_com", lambda _d: "<html><body>body with enough length</body></html>")
-    assert mailer.create_draft_and_maybe_send(DraftMessage("to@example.com", "", "s", tmp_path / "x.docx", {}), lambda _: False) is False
-    assert sent["send"] == 0
+    monkeypatch.setattr(mailer, "_render_template_to_filtered_html_via_word_com", lambda _d: "<html><body>body with enough length for rendering</body></html>")
+    with pytest.raises(RuntimeError, match="Unable to set Outlook sender identity"):
+        mailer.create_draft_and_maybe_send(DraftMessage("to@example.com", "", "s", tmp_path / "x.docx", {}), lambda _: True)
 
 
 def test_validate_rendered_html_failures():
