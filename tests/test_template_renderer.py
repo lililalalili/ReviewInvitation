@@ -7,6 +7,7 @@ from nb_review_invitation_agent.template_renderer import (
     add_calendar_months,
     build_placeholder_map,
     derive_family_name,
+    normalize_journal_name,
     select_template_and_subject,
 )
 
@@ -89,3 +90,33 @@ def test_dynamic_values_are_escaped_in_rendered_html(tmp_path: Path):
 def test_missing_html_template_raises_clear_error(tmp_path: Path):
     with pytest.raises(FileNotFoundError, match="Template not found"):
         TemplateRenderer(templates_dir=tmp_path).render_for_row({"Manual Decision": "Insight"}, date(2026, 5, 16))
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("nature neuroscience", "Nature Neuroscience"),
+        ("NATURE NEUROSCIENCE", "Nature Neuroscience"),
+        ("science (new york, n.y.)", "Science (New York, N.Y.)"),
+        ("Science (New York, N.Y.)", "Science (New York, N.Y.)"),
+        ("PNAS", "PNAS"),
+        ("snyny", "SNYNY"),
+        ("u.s.a.", "U.S.A."),
+    ],
+)
+def test_normalize_journal_name(raw: str, expected: str):
+    assert normalize_journal_name(raw) == expected
+
+
+def test_rendered_html_uses_normalized_journal_placeholder(tmp_path: Path):
+    tpl = tmp_path / "NB_Template_Insight.html"
+    tpl.write_text("<html><body>Jjjjj</body></html>", encoding="utf-8")
+    rendered = TemplateRenderer(templates_dir=tmp_path).render_for_row(
+        {
+            "Manual Decision": "Insight",
+            "Overseas": "No",
+            "Journal": "science (new york, n.y.)",
+        },
+        date(2026, 5, 16),
+    )
+    assert "Science (New York, N.Y.)" in rendered.rendered_html

@@ -11,6 +11,10 @@ from pathlib import Path
 REVIEW_SUBJECT = "Neuroscience Bulletin Invites You to Submit a Review"
 INSIGHT_SUBJECT = "Neuroscience Bulletin Invites You to Submit an Insight"
 
+JOURNAL_ABBREVIATION_EXCEPTIONS: dict[str, str] = {
+    "snyny": "SNYNY",
+}
+
 
 @dataclass(frozen=True)
 class TemplateChoice:
@@ -40,8 +44,31 @@ def format_readable_date(value: date) -> str:
 
 
 def normalize_journal_name(journal: str) -> str:
-    parts = re.split(r"\s+", (journal or "").strip())
-    return " ".join(p.capitalize() for p in parts if p)
+    def normalize_word(word: str) -> str:
+        letters_only = re.sub(r"[^A-Za-z]", "", word)
+        if not letters_only:
+            return word
+
+        exception = JOURNAL_ABBREVIATION_EXCEPTIONS.get(letters_only.lower())
+        if exception and word.isalpha():
+            return exception
+
+        if re.fullmatch(r"(?:[A-Za-z]\.){2,}", word):
+            return word.upper()
+
+        if word.isalpha() and word.isupper() and 2 <= len(word) <= 5:
+            return word
+
+        if word.isalpha():
+            return word[0].upper() + word[1:].lower()
+
+        return word
+
+    def normalize_segment(segment: str) -> str:
+        return re.sub(r"[A-Za-z.]+", lambda m: normalize_word(m.group(0)), segment)
+
+    parts = re.split(r"(\s+)", (journal or "").strip())
+    return "".join(normalize_segment(part) if not part.isspace() else part for part in parts)
 
 
 def trim_terminal_period(title: str) -> str:
