@@ -23,6 +23,7 @@ class FakeController:
         self.written = []
         self.saved = 0
         self.save_path = "fake.xlsm"
+        self.fail_save = False
 
     def get_current_row(self):
         return self.row
@@ -32,6 +33,8 @@ class FakeController:
         self.row.values[field] = value
 
     def save_workbook(self, _):
+        if self.fail_save:
+            raise RuntimeError("Failed to save workbook. Please close NB_Author_2026.xlsm in Excel and try again.")
         self.saved += 1
 
 
@@ -93,7 +96,7 @@ def test_confirmation_and_send_failures_and_success():
     svc_ok = InvitationService(controller_ok, renderer, mailer_ok, lambda _: True, today_provider=lambda: date(2026, 5, 16))
     res_ok = svc_ok.invite_current()
     assert res_ok.status == "Sent"
-    assert controller_ok.saved == 1
+    assert controller_ok.saved == 2
     assert controller_ok.written and controller_ok.written[0][1] == "Date of Invitaion"
     assert mailer_ok.drafts[0].cc_email == "first@example.com"
 
@@ -114,4 +117,28 @@ def test_missing_save_path_preflight_blocks_send_and_write():
     assert "save_path" in res.message
     assert "无法发送" in res.message
     assert svc.mailer.drafts == []
+    assert controller.written == []
+
+
+def test_preflight_save_failure_blocks_renderer_and_mailer_and_date_write():
+    class FakeRenderer:
+        def __init__(self):
+            self.calls = 0
+
+        def render_for_row(self, *_):
+            self.calls += 1
+            raise AssertionError("renderer should not be called")
+
+    row_ok = Row(2, base_values())
+    controller = FakeController(row_ok)
+    controller.fail_save = True
+    renderer = FakeRenderer()
+    mailer = FakeMailer()
+    svc = InvitationService(controller, renderer, mailer, lambda _: True, today_provider=lambda: date(2026, 5, 16))
+
+    res = svc.invite_current()
+    assert res.status == "Error"
+    assert "Please close NB_Author_2026.xlsm" in res.message
+    assert renderer.calls == 0
+    assert mailer.drafts == []
     assert controller.written == []
