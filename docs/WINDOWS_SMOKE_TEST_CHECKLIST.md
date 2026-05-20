@@ -17,9 +17,12 @@
 15. If placeholders remain, do **not** send and report the remaining placeholders. A draft should not be displayed if template rendering fails.
 16. Capture and report exactly which placeholders remain (for example: `Aaaaa`, `Ttttt`).
 17. Intended production path: Word-first replacement with OOXML fallback if placeholders remain.
-18. Verify already-invited row is skipped.
-19. Verify `Manual Decision = No` row is skipped.
-20. Verify BatchInvitation requests confirmation per row.
+18. If Microsoft Word reports the rendered template may be corrupt (`文件可能已经损坏` / "the file may be corrupt"), do **not** send.
+19. Report the exact Word error message and the exact template file path/name used.
+20. Verify rendering failures block before any Outlook draft is displayed.
+21. Verify already-invited row is skipped.
+22. Verify `Manual Decision = No` row is skipped.
+23. Verify BatchInvitation requests confirmation per row.
 
 Recommended commands:
 ```powershell

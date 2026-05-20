@@ -34,7 +34,7 @@ def test_render_template_docx_with_ooxml_replaces_and_escapes(tmp_path: Path):
 
 def test_remaining_placeholders_detected(tmp_path: Path):
     source = tmp_path / "template.docx"
-    _make_docx(source, "<w:t>Aaaaa Dddddin</w:t>")
+    _make_docx(source, "<w:t>Aaa</w:t><w:t>aa Dddd</w:t><w:t>din</w:t>")
     assert OutlookMailer()._remaining_placeholders_in_docx(source, {"Aaaaa": "Li"}) == ["Aaaaa", "Dddddin"]
 
 
@@ -305,3 +305,78 @@ def test_ooxml_fallback_replaces_split_placeholder_runs(tmp_path: Path):
         assert OutlookMailer()._remaining_placeholders_in_docx(rendered, {"Aaaaa": "Li"}) == []
     finally:
         rendered.unlink(missing_ok=True)
+
+
+def test_ooxml_fallback_preserves_xml_prefixes_and_attributes(tmp_path: Path):
+    source = tmp_path / "template.docx"
+    original = '<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p custom="1"><w:r><w:t xml:space="preserve">Aaaaa</w:t></w:r></w:p></w:document>'
+    _make_docx(source, original)
+    rendered = OutlookMailer()._render_template_docx_with_ooxml(source, {"Aaaaa": "Li"})
+    try:
+        with zipfile.ZipFile(rendered, "r") as zf:
+            text = zf.read("word/document.xml").decode("utf-8")
+        assert "w:document" in text
+        assert 'xml:space="preserve"' in text
+        assert 'custom="1"' in text
+    finally:
+        rendered.unlink(missing_ok=True)
+
+
+def test_ooxml_escape_special_characters(tmp_path: Path):
+    source = tmp_path / "template.docx"
+    _make_docx(source, '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:t>Aaaaa</w:t></w:document>')
+    rendered = OutlookMailer()._render_template_docx_with_ooxml(source, {"Aaaaa": 'A&B<>"\''})
+    try:
+        with zipfile.ZipFile(rendered, "r") as zf:
+            text = zf.read("word/document.xml").decode("utf-8")
+        assert "A&amp;B&lt;&gt;&quot;&apos;" in text
+    finally:
+        rendered.unlink(missing_ok=True)
+
+
+def test_ooxml_fallback_result_zip_is_valid(tmp_path: Path):
+    source = tmp_path / "template.docx"
+    _make_docx(source, '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:t>Aaaaa</w:t></w:document>')
+    rendered = OutlookMailer()._render_template_docx_with_ooxml(source, {"Aaaaa": "Li"})
+    try:
+        with zipfile.ZipFile(rendered, "r") as zf:
+            assert zf.testzip() is None
+    finally:
+        rendered.unlink(missing_ok=True)
+
+
+def test_render_formatted_body_fallback_word_open_failure_raises_clear_error(monkeypatch, tmp_path: Path):
+    source = tmp_path / "template.docx"
+    rendered = tmp_path / "rendered.docx"
+    _make_docx(source, "<w:t>Aaaaa</w:t>")
+    _make_docx(rendered, "<w:t>done</w:t>")
+
+    class FakeDocuments:
+        def Open(self, p):
+            if Path(p) == rendered:
+                raise RuntimeError("Word says corrupt")
+            return types.SimpleNamespace(Content=types.SimpleNamespace(Copy=lambda: None), Close=lambda *_: None)
+
+    class FakeWord:
+        def __init__(self):
+            self.Visible = False
+            self.Documents = FakeDocuments()
+
+        def Quit(self):
+            return None
+
+    class FakeWin32Client:
+        @staticmethod
+        def Dispatch(_name):
+            return FakeWord()
+
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=FakeWin32Client))
+    monkeypatch.setitem(sys.modules, "win32com.client", FakeWin32Client)
+    mailer = OutlookMailer()
+    monkeypatch.setattr(mailer, "_render_template_docx_with_ooxml", lambda *_: rendered)
+    monkeypatch.setattr(mailer, "_replace_placeholders_in_word_doc", lambda *_: None)
+    states = iter([["Aaaaa"]])
+    monkeypatch.setattr(mailer, "_remaining_placeholders_in_word_doc", lambda _doc: next(states, []))
+    monkeypatch.setattr(mailer, "_remaining_placeholders_in_docx", lambda *_: [])
+    with pytest.raises(RuntimeError, match="Rendered Word template could not be opened"):
+        mailer._render_formatted_body_to_clipboard_via_word_com(DraftMessage("to@example.com", "", "s", source, {"Aaaaa": "Li"}))
