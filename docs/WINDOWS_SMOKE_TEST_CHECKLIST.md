@@ -9,12 +9,12 @@
 7. Run GUI.
 8. Verify workbook opens.
 9. Verify batch dropdown works.
-10. Verify editable fields save (`Overseas`, `Manual Decision`, `Research field`).
+10. Verify editable fields save (`Overseas`, `Manual Decision`, `Research field`). Ensure `NB_Author_2026.xlsm` is closed in Excel before Save or sending invitations.
 11. Verify link buttons open references.
 12. Verify current-row invitation creates formatted Outlook draft/send flow.
 13. Verify cancel in confirmation dialog does not send and does not write date.
 14. Verify confirmed successful send writes `Date of Invitaion` only after send success.
-15. If the Outlook draft still contains placeholders, do **not** send.
+15. If placeholders remain, do **not** send and report the remaining placeholders. A draft should not be displayed if template rendering fails.
 16. Capture and report exactly which placeholders remain (for example: `Aaaaa`, `Ttttt`).
 17. Intended production path: Word-first replacement with OOXML fallback if placeholders remain.
 18. Verify already-invited row is skipped.
