@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 import calendar
 import re
+from html import escape
 from pathlib import Path
 
 
@@ -23,7 +24,7 @@ class RenderedInvitation:
     template_name: str
     subject: str
     placeholders: dict[str, str]
-    body_text: str | None = None
+    rendered_html: str
 
 
 def add_calendar_months(value: date, months: int) -> date:
@@ -65,10 +66,10 @@ def select_template_and_subject(row_values: dict[str, str]) -> TemplateChoice:
 
     if manual == "Review":
         if overseas == "Yes":
-            return TemplateChoice("NB_Template_Review_Yes.docx", REVIEW_SUBJECT)
-        return TemplateChoice("NB_Template_Review_No.docx", REVIEW_SUBJECT)
+            return TemplateChoice("NB_Template_Review_Yes.html", REVIEW_SUBJECT)
+        return TemplateChoice("NB_Template_Review_No.html", REVIEW_SUBJECT)
     if manual == "Insight":
-        return TemplateChoice("NB_Template_Insight.docx", INSIGHT_SUBJECT)
+        return TemplateChoice("NB_Template_Insight.html", INSIGHT_SUBJECT)
     if manual == "No":
         raise ValueError("Manual Decision = No，请确认是否邀请")
     raise ValueError("Manual Decision 为空或不支持，请先设置为 Review / Insight")
@@ -103,11 +104,30 @@ class TemplateRenderer:
         if not template_path.exists():
             raise FileNotFoundError(f"Template not found: {template_path}")
 
-        body_text = "\n".join(f"{k}={v}" for k, v in placeholders.items())
+        rendered_html = self.render_html_for_row(template_path, placeholders)
         return RenderedInvitation(
             template_path=template_path,
             template_name=choice.template_name,
             subject=choice.subject,
             placeholders=placeholders,
-            body_text=body_text,
+            rendered_html=rendered_html,
         )
+
+    def render_html_for_row(self, template_path: Path, placeholders: dict[str, str]) -> str:
+        template_html = template_path.read_text(encoding="utf-8")
+        rendered_html = self.replace_placeholders_in_html(template_html, placeholders)
+        self.validate_rendered_html(rendered_html)
+        return rendered_html
+
+    def replace_placeholders_in_html(self, template_html: str, placeholders: dict[str, str]) -> str:
+        rendered = template_html
+        for key, value in placeholders.items():
+            rendered = rendered.replace(key, escape(str(value or ""), quote=True))
+        return rendered
+
+    def validate_rendered_html(self, rendered_html: str) -> None:
+        if len(rendered_html.strip()) <= 20:
+            raise RuntimeError("Rendered email body is empty.")
+        remaining = [k for k in build_placeholder_map({}, date.today()).keys() if k in rendered_html]
+        if remaining:
+            raise RuntimeError(f"Rendered email body still contains placeholders: {', '.join(remaining)}")

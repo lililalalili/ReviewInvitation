@@ -36,7 +36,7 @@ class DraftMessage:
     subject: str
     template_path: Path
     placeholders: dict[str, str]
-    body_text: str | None = None
+    body_html: str | None = None
 
 
 class ConfirmationProvider(Protocol):
@@ -59,9 +59,8 @@ class OutlookMailer:
         if sender is None:
             raise RuntimeError(f"Outlook account {send_account_address} not found")
 
-        rendered_html = self._render_template_to_filtered_html_via_word_com(draft) if self._is_windows() else (draft.body_text or "")
-        if not self._is_windows() and len(rendered_html.strip()) <= 20:
-            raise RuntimeError("Rendered email body is empty.")
+        rendered_html = draft.body_html or ""
+        self._validate_rendered_html(rendered_html)
 
         mail = self._create_mail_item_for_account(outlook, sender)
         self._bind_save_sent_folder(mail, sender)
