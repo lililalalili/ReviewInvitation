@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 import tempfile
@@ -21,6 +22,11 @@ KNOWN_PLACEHOLDERS = (
     "Dddddin",
 )
 TEXT_NODE_PATTERN = re.compile(r"(<(?P<tag>w:t|a:t)\b[^>]*>)(?P<text>.*?)(</(?P=tag)>)", re.DOTALL)
+WD_FORMAT_FILTERED_HTML = 10
+OL_FOLDER_DRAFTS = 16
+OL_FOLDER_SENT_MAIL = 5
+DEFAULT_OUTLOOK_SEND_ACCOUNT = "nsb@ion.ac.cn"
+DEFAULT_OUTLOOK_FORCE_FROM_ADDRESS = "nsb@ion.ac.cn"
 
 
 @dataclass
@@ -46,28 +52,28 @@ class OutlookMailer:
 
         outlook = win32com.client.Dispatch("Outlook.Application")
         namespace = outlook.GetNamespace("MAPI")
+        send_account_address = os.getenv("OUTLOOK_SEND_ACCOUNT", DEFAULT_OUTLOOK_SEND_ACCOUNT).strip()
+        force_from_address = os.getenv("OUTLOOK_FORCE_FROM_ADDRESS", DEFAULT_OUTLOOK_FORCE_FROM_ADDRESS).strip()
 
-        sender = None
-        for account in namespace.Accounts:
-            smtp = str(getattr(account, "SmtpAddress", "")).strip().lower()
-            if smtp == "nsb@ion.ac.cn":
-                sender = account
-                break
+        sender = self._select_sender_account(namespace, send_account_address)
         if sender is None:
-            raise RuntimeError("Outlook account nsb@ion.ac.cn not found")
+            raise RuntimeError(f"Outlook account {send_account_address} not found")
 
-        mail = outlook.CreateItem(0)
+        rendered_html = self._render_template_to_filtered_html_via_word_com(draft) if self._is_windows() else (draft.body_text or "")
+        if not self._is_windows() and len(rendered_html.strip()) <= 20:
+            raise RuntimeError("Rendered email body is empty.")
+
+        mail = self._create_mail_item_for_account(outlook, sender)
+        self._bind_save_sent_folder(mail, sender)
+
         mail.To = draft.to_email
         mail.CC = draft.cc_email
         mail.Subject = draft.subject
         mail.SendUsingAccount = sender
-        if self._is_windows():
-            self._render_formatted_body_to_clipboard_via_word_com(draft)
-            mail.Display()
-            self._paste_clipboard_into_mail(mail)
-        else:
-            mail.Body = draft.body_text or ""
-            mail.Display()
+        self._set_sent_on_behalf_of(mail, force_from_address)
+        mail.HTMLBody = rendered_html
+        self._validate_outlook_body(mail)
+        mail.Display()
 
         if not confirm("确认发送邮件？"):
             return False
@@ -75,11 +81,43 @@ class OutlookMailer:
         mail.Send()
         return True
 
+    def _select_sender_account(self, namespace, send_account_address: str):
+        for account in namespace.Accounts:
+            smtp = str(getattr(account, "SmtpAddress", "")).strip().lower()
+            if smtp == send_account_address.lower():
+                return account
+        return None
+
+    def _create_mail_item_for_account(self, outlook, sender):
+        try:
+            store = sender.DeliveryStore
+            drafts = store.GetDefaultFolder(OL_FOLDER_DRAFTS)
+            return drafts.Items.Add("IPM.Note")
+        except Exception:
+            return outlook.CreateItem(0)
+
+    def _bind_save_sent_folder(self, mail, sender) -> None:
+        try:
+            store = sender.DeliveryStore
+            sent = store.GetDefaultFolder(OL_FOLDER_SENT_MAIL)
+            mail.SaveSentMessageFolder = sent
+        except Exception:
+            return None
+
+    def _set_sent_on_behalf_of(self, mail, force_from_address: str) -> None:
+        if not force_from_address:
+            return
+        try:
+            mail.SentOnBehalfOfName = force_from_address
+        except Exception as exc:
+            raise RuntimeError(f"Unable to set Outlook sender identity to {force_from_address} via SentOnBehalfOfName.") from exc
+
     def _is_windows(self) -> bool:
         import platform
 
         return platform.system().lower().startswith("win")
 
+    # ... rest unchanged
     def _replace_placeholders_in_range(self, word_range, placeholders: dict[str, str]) -> None:
         wd_find_continue = 1
         wd_replace_all = 2
@@ -88,17 +126,7 @@ class OutlookMailer:
             find = word_range.Find
             find.ClearFormatting()
             find.Replacement.ClearFormatting()
-            find.Execute(
-                FindText=key,
-                MatchCase=False,
-                MatchWholeWord=False,
-                MatchWildcards=False,
-                Forward=True,
-                Wrap=wd_find_continue,
-                Format=False,
-                ReplaceWith=replacement,
-                Replace=wd_replace_all,
-            )
+            find.Execute(FindText=key, MatchCase=False, MatchWholeWord=False, MatchWildcards=False, Forward=True, Wrap=wd_find_continue, Format=False, ReplaceWith=replacement, Replace=wd_replace_all)
 
     def _replace_placeholders_in_shapes(self, shapes, placeholders: dict[str, str]) -> None:
         for shape in shapes:
@@ -113,13 +141,11 @@ class OutlookMailer:
 
     def _replace_placeholders_in_word_doc(self, doc, placeholders: dict[str, str]) -> None:
         self._replace_placeholders_in_range(doc.Content, placeholders)
-
         for story_range in getattr(doc, "StoryRanges", []):
             current = story_range
             while current is not None:
                 self._replace_placeholders_in_range(current, placeholders)
                 current = getattr(current, "NextStoryRange", None)
-
         shapes = getattr(doc, "Shapes", None)
         if shapes is not None:
             self._replace_placeholders_in_shapes(shapes, placeholders)
@@ -131,7 +157,6 @@ class OutlookMailer:
             while current is not None:
                 haystacks.append(str(getattr(current, "Text", "")))
                 current = getattr(current, "NextStoryRange", None)
-
         shapes = getattr(doc, "Shapes", None)
         if shapes is not None:
             for shape in shapes:
@@ -142,22 +167,78 @@ class OutlookMailer:
                     haystacks.append(str(getattr(frame.TextRange, "Text", "")))
                 except Exception:
                     continue
+        return sorted({k for k in known_placeholders if any(k in text for text in haystacks)})
 
-        remaining = sorted({k for k in known_placeholders if any(k in text for text in haystacks)})
-        return remaining
+    def _save_word_doc_as_filtered_html(self, doc) -> str:
+        tmp = tempfile.NamedTemporaryFile(prefix="nb_rendered_", suffix=".htm", delete=False)
+        tmp_path = Path(tmp.name)
+        tmp.close()
+        doc.SaveAs(str(tmp_path), FileFormat=WD_FORMAT_FILTERED_HTML)
+        return str(tmp_path)
+
+    def _validate_rendered_html(self, html: str) -> None:
+        if len(html.strip()) <= 20:
+            raise RuntimeError("Rendered email body is empty.")
+        remaining = [k for k in KNOWN_PLACEHOLDERS if k in html]
+        if remaining:
+            raise RuntimeError(f"Rendered email body still contains placeholders: {', '.join(remaining)}")
+
+    def _validate_outlook_body(self, mail) -> None:
+        body = str(getattr(mail, "Body", "") or "")
+        if len(body.strip()) <= 20:
+            raise RuntimeError("Outlook email body is empty after HTMLBody assignment.")
+        remaining = [k for k in KNOWN_PLACEHOLDERS if k in body]
+        if remaining:
+            raise RuntimeError(f"Outlook email body still contains placeholders: {', '.join(remaining)}")
+
+    def _render_template_to_filtered_html_via_word_com(self, draft: DraftMessage) -> str:  # pragma: no cover - windows-only
+        import win32com.client  # type: ignore[import-not-found]
+        word = win32com.client.Dispatch("Word.Application")
+        word.Visible = False
+        doc = None
+        rendered_template_path: Path | None = None
+        temp_html_path: Path | None = None
+        try:
+            doc = word.Documents.Open(str(draft.template_path))
+            self._replace_placeholders_in_word_doc(doc, draft.placeholders)
+            remaining = self._remaining_placeholders_in_word_doc(doc)
+            if remaining:
+                doc.Close(False)
+                doc = None
+                rendered_template_path = self._render_template_docx_with_ooxml(draft.template_path, draft.placeholders)
+                rem2 = self._remaining_placeholders_in_docx(rendered_template_path, draft.placeholders)
+                if rem2:
+                    raise RuntimeError(f"Rendered email body still contains placeholders: {', '.join(rem2)}")
+                doc = word.Documents.Open(str(rendered_template_path))
+                remaining = self._remaining_placeholders_in_word_doc(doc)
+                if remaining:
+                    raise RuntimeError(f"Rendered email body still contains placeholders: {', '.join(remaining)}")
+            text = str(getattr(doc.Content, "Text", "") or "")
+            if len(text.strip()) <= 20:
+                raise RuntimeError("Rendered email body is empty.")
+            temp_html_path = Path(self._save_word_doc_as_filtered_html(doc))
+            html = temp_html_path.read_text(encoding="utf-8", errors="ignore")
+            self._validate_rendered_html(html)
+            return html
+        finally:
+            if doc is not None:
+                doc.Close(False)
+            word.Quit()
+            if rendered_template_path is not None:
+                rendered_template_path.unlink(missing_ok=True)
+            if temp_html_path is not None:
+                temp_html_path.unlink(missing_ok=True)
+
+    def _paste_clipboard_into_mail(self, mail) -> None:
+        inspector = mail.GetInspector
+        editor = inspector.WordEditor
+        editor.Range(0, 0).Paste()
 
     def _extract_text_nodes(self, xml_text: str) -> list[dict[str, str | int]]:
         nodes: list[dict[str, str | int]] = []
         for match in TEXT_NODE_PATTERN.finditer(xml_text):
             text_raw = match.group("text")
-            nodes.append(
-                {
-                    "start": match.start("text"),
-                    "end": match.end("text"),
-                    "raw": text_raw,
-                    "text": html_unescape(text_raw),
-                }
-            )
+            nodes.append({"start": match.start("text"), "end": match.end("text"), "raw": text_raw, "text": html_unescape(text_raw)})
         return nodes
 
     def _replace_placeholders_in_xml_text_nodes(self, xml_text: str, placeholders: dict[str, str]) -> str:
@@ -166,9 +247,7 @@ class OutlookMailer:
             return xml_text
         full_text = "".join(str(node["text"]) for node in nodes)
         for key, value in placeholders.items():
-            replacement = "" if value is None else str(value)
-            full_text = full_text.replace(key, replacement)
-
+            full_text = full_text.replace(key, "" if value is None else str(value))
         rendered_node_texts: list[str] = []
         cursor = 0
         for index, node in enumerate(nodes):
@@ -178,12 +257,10 @@ class OutlookMailer:
             else:
                 rendered_node_texts.append(full_text[cursor : cursor + source_len])
                 cursor += source_len
-
         chunks: list[str] = []
         last = 0
         for node, replacement_text in zip(nodes, rendered_node_texts):
-            start = int(node["start"])
-            end = int(node["end"])
+            start, end = int(node["start"]), int(node["end"])
             chunks.append(xml_text[last:start])
             chunks.append(escape(replacement_text, {'"': "&quot;", "'": "&apos;"}))
             last = end
@@ -194,7 +271,6 @@ class OutlookMailer:
         temp_file = tempfile.NamedTemporaryFile(prefix="nb_rendered_", suffix=".docx", delete=False)
         temp_path = Path(temp_file.name)
         temp_file.close()
-
         with zipfile.ZipFile(template_path, "r") as source_zip, zipfile.ZipFile(temp_path, "w") as dest_zip:
             for item in source_zip.infolist():
                 content = source_zip.read(item.filename)
@@ -204,7 +280,6 @@ class OutlookMailer:
                         xml_text = self._replace_placeholders_in_xml_text_nodes(xml_text, placeholders)
                     content = xml_text.encode("utf-8")
                 dest_zip.writestr(item, content)
-
         with zipfile.ZipFile(temp_path, "r") as rendered_zip:
             if rendered_zip.testzip() is not None:
                 raise RuntimeError("Rendered Word template could not be opened. The generated document may be invalid.")
@@ -212,17 +287,11 @@ class OutlookMailer:
 
     def _is_target_xml_part(self, filename: str) -> bool:
         name = Path(filename).name
-        return (
-            filename == "word/document.xml"
-            or name.startswith("header")
-            or name.startswith("footer")
-            or filename in {"word/footnotes.xml", "word/endnotes.xml", "word/comments.xml"}
-        )
+        return filename == "word/document.xml" or name.startswith("header") or name.startswith("footer") or filename in {"word/footnotes.xml", "word/endnotes.xml", "word/comments.xml"}
 
     def _remaining_placeholders_in_docx(self, docx_path: Path, placeholders: dict[str, str]) -> list[str]:
         remaining: set[str] = set()
         keys = tuple(dict.fromkeys([*KNOWN_PLACEHOLDERS, *placeholders.keys()]))
-
         with zipfile.ZipFile(docx_path, "r") as zf:
             for item in zf.infolist():
                 if not (item.filename.startswith("word/") and item.filename.endswith(".xml")):
@@ -232,45 +301,4 @@ class OutlookMailer:
                 for key in keys:
                     if key in combined_text:
                         remaining.add(key)
-
         return sorted(remaining)
-
-    def _paste_clipboard_into_mail(self, mail) -> None:
-        inspector = mail.GetInspector
-        editor = inspector.WordEditor
-        editor.Range(0, 0).Paste()
-
-    def _render_formatted_body_to_clipboard_via_word_com(self, draft: DraftMessage) -> None:  # pragma: no cover - windows-only
-        import win32com.client  # type: ignore[import-not-found]
-
-        word = win32com.client.Dispatch("Word.Application")
-        word.Visible = False
-        doc = None
-        rendered_template_path: Path | None = None
-        try:
-            doc = word.Documents.Open(str(draft.template_path))
-            self._replace_placeholders_in_word_doc(doc, draft.placeholders)
-            remaining = self._remaining_placeholders_in_word_doc(doc)
-
-            if remaining:
-                doc.Close(False)
-                doc = None
-                rendered_template_path = self._render_template_docx_with_ooxml(draft.template_path, draft.placeholders)
-                remaining = self._remaining_placeholders_in_docx(rendered_template_path, draft.placeholders)
-                if remaining:
-                    raise RuntimeError(f"Template placeholders were not fully replaced: {', '.join(remaining)}")
-                try:
-                    doc = word.Documents.Open(str(rendered_template_path))
-                except Exception as exc:
-                    raise RuntimeError("Rendered Word template could not be opened. The generated document may be invalid.") from exc
-                remaining = self._remaining_placeholders_in_word_doc(doc)
-                if remaining:
-                    raise RuntimeError(f"Template placeholders were not fully replaced: {', '.join(remaining)}")
-
-            doc.Content.Copy()
-        finally:
-            if doc is not None:
-                doc.Close(False)
-            word.Quit()
-            if rendered_template_path is not None:
-                rendered_template_path.unlink(missing_ok=True)
