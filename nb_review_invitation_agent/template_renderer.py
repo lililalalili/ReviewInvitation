@@ -11,6 +11,87 @@ from pathlib import Path
 REVIEW_SUBJECT = "Neuroscience Bulletin Invites You to Submit a Review"
 INSIGHT_SUBJECT = "Neuroscience Bulletin Invites You to Submit an Insight"
 
+JOURNAL_ACRONYMS = {"PNAS", "CNS", "SNYNY", "JAMA", "BMJ", "EMBO", "FASEB", "PLOS"}
+
+JOURNAL_NAME_EXCEPTIONS: dict[str, str] = {
+    "nature": "Nature",
+    "science": "Science",
+    "cell": "Cell",
+    "neuron": "Neuron",
+    "nature neuroscience": "Nature Neuroscience",
+    "nature methods": "Nature Methods",
+    "nature medicine": "Nature Medicine",
+    "nature biotechnology": "Nature Biotechnology",
+    "nature genetics": "Nature Genetics",
+    "nature aging": "Nature Aging",
+    "nature communications": "Nature Communications",
+    "communications biology": "Communications Biology",
+    "communications medicine": "Communications Medicine",
+    "science advances": "Science Advances",
+    "science translational medicine": "Science Translational Medicine",
+    "cell reports": "Cell Reports",
+    "cell reports medicine": "Cell Reports Medicine",
+    "current biology": "Current Biology",
+    "developmental cell": "Developmental Cell",
+    "immunity": "Immunity",
+    "cancer cell": "Cancer Cell",
+    "molecular cell": "Molecular Cell",
+    "nature reviews neuroscience": "Nature Reviews Neuroscience",
+    "nature reviews neurology": "Nature Reviews Neurology",
+    "trends in neurosciences": "Trends in Neurosciences",
+    "trends in cognitive sciences": "Trends in Cognitive Sciences",
+    "annual review of neuroscience": "Annual Review of Neuroscience",
+    "physiological reviews": "Physiological Reviews",
+    "journal of neuroscience": "Journal of Neuroscience",
+    "the journal of neuroscience": "The Journal of Neuroscience",
+    "journal of neurophysiology": "Journal of Neurophysiology",
+    "neuroscience bulletin": "Neuroscience Bulletin",
+    "brain": "Brain",
+    "brain research": "Brain Research",
+    "cerebral cortex": "Cerebral Cortex",
+    "neuroimage": "NeuroImage",
+    "annals of neurology": "Annals of Neurology",
+    "jama neurology": "JAMA Neurology",
+    "lancet neurology": "Lancet Neurology",
+    "the lancet neurology": "The Lancet Neurology",
+    "molecular psychiatry": "Molecular Psychiatry",
+    "biological psychiatry": "Biological Psychiatry",
+    "translational psychiatry": "Translational Psychiatry",
+    "nature mental health": "Nature Mental Health",
+    "elife": "eLife",
+    "plos biology": "PLOS Biology",
+    "plos one": "PLOS ONE",
+    "plos computational biology": "PLOS Computational Biology",
+    "proceedings of the national academy of sciences": "Proceedings of the National Academy of Sciences",
+    "proc natl acad sci u s a": "Proc Natl Acad Sci U S A",
+    "pnas": "PNAS",
+    "pnas nexus": "PNAS Nexus",
+    "science (new york, n.y.)": "Science (New York, N.Y.)",
+    "science new york n y": "Science (New York, N.Y.)",
+    "snyny": "SNYNY",
+    "embo journal": "EMBO Journal",
+    "the embo journal": "The EMBO Journal",
+    "embo reports": "EMBO Reports",
+    "f1000research": "F1000Research",
+    "biorxiv": "bioRxiv",
+    "medrxiv": "medRxiv",
+    "cell stem cell": "Cell Stem Cell",
+    "nature cell biology": "Nature Cell Biology",
+    "nature structural & molecular biology": "Nature Structural & Molecular Biology",
+    "nature biomedical engineering": "Nature Biomedical Engineering",
+    "advanced science": "Advanced Science",
+    "advanced materials": "Advanced Materials",
+    "acs chemical neuroscience": "ACS Chemical Neuroscience",
+    "journal of clinical investigation": "Journal of Clinical Investigation",
+    "new england journal of medicine": "New England Journal of Medicine",
+    "the new england journal of medicine": "The New England Journal of Medicine",
+    "lancet": "The Lancet",
+    "the lancet": "The Lancet",
+    "bmj": "BMJ",
+    "jama": "JAMA",
+}
+
+
 
 @dataclass(frozen=True)
 class TemplateChoice:
@@ -40,8 +121,32 @@ def format_readable_date(value: date) -> str:
 
 
 def normalize_journal_name(journal: str) -> str:
-    parts = re.split(r"\s+", (journal or "").strip())
-    return " ".join(p.capitalize() for p in parts if p)
+    normalized_input = (journal or "").strip()
+    if not normalized_input:
+        return ""
+
+    canonical = JOURNAL_NAME_EXCEPTIONS.get(normalized_input.lower())
+    if canonical:
+        return canonical
+
+    def normalize_word(word: str) -> str:
+        if re.fullmatch(r"(?:[A-Za-z]\.){2,}", word):
+            return word.upper()
+
+        if word.isalpha() and word.upper() in JOURNAL_ACRONYMS:
+            return word.upper()
+
+        if word.isalpha():
+            return word[0].upper() + word[1:].lower()
+
+        return word
+
+    def normalize_segment(segment: str) -> str:
+        return re.sub(r"[A-Za-z.]+", lambda m: normalize_word(m.group(0)), segment)
+
+    parts = re.split(r"(\s+)", normalized_input)
+    normalized = "".join(normalize_segment(part) if not part.isspace() else part for part in parts)
+    return JOURNAL_NAME_EXCEPTIONS.get(normalized.lower(), normalized)
 
 
 def trim_terminal_period(title: str) -> str:

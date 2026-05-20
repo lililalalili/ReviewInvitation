@@ -23,6 +23,7 @@ class ReviewGuiApp:
         self.root.title("NB Review Invitation")
         self._editable_vars: dict[str, tk.StringVar] = {}
         self._readonly_vars: dict[str, tk.StringVar] = {}
+        self._editable_widgets: dict[str, tk.Widget] = {}
         self.invitation_service = InvitationService(
             controller=self.controller,
             renderer=TemplateRenderer(),
@@ -51,15 +52,19 @@ class ReviewGuiApp:
                 self._editable_vars[field] = var
                 cb = ttk.Combobox(body, textvariable=var, values=["Yes", "No"], state="readonly")
                 cb.grid(row=idx, column=1, sticky="ew", padx=4, pady=2)
+                self._editable_widgets[field] = cb
             elif field == "Manual Decision":
                 var = tk.StringVar()
                 self._editable_vars[field] = var
                 cb = ttk.Combobox(body, textvariable=var, values=["Review", "Insight", "No"], state="readonly")
                 cb.grid(row=idx, column=1, sticky="ew", padx=4, pady=2)
+                self._editable_widgets[field] = cb
             elif field == "Research field":
                 var = tk.StringVar()
                 self._editable_vars[field] = var
-                ttk.Entry(body, textvariable=var).grid(row=idx, column=1, sticky="ew", padx=4, pady=2)
+                entry = ttk.Entry(body, textvariable=var)
+                entry.grid(row=idx, column=1, sticky="ew", padx=4, pady=2)
+                self._editable_widgets[field] = entry
             elif field in {"Last Author Web", "Pubmed Link", "Email of the Last Author"}:
                 var = tk.StringVar()
                 self._readonly_vars[field] = var
@@ -72,6 +77,9 @@ class ReviewGuiApp:
                 ttk.Entry(body, textvariable=var, state="readonly").grid(row=idx, column=1, sticky="ew", padx=4, pady=2)
 
         body.columnconfigure(1, weight=1)
+
+        self._lock_status_var = tk.StringVar(value="")
+        ttk.Label(self.root, textvariable=self._lock_status_var, foreground="#8a6d3b").pack(fill="x", padx=8)
 
         nav = ttk.Frame(self.root)
         nav.pack(fill="x", padx=8, pady=8)
@@ -92,6 +100,14 @@ class ReviewGuiApp:
             var.set(row.values.get(field, ""))
         for field, var in self._readonly_vars.items():
             var.set(row.values.get(field, ""))
+
+        is_locked = self.controller.is_row_locked(row)
+        for field, widget in self._editable_widgets.items():
+            if field in {"Overseas", "Manual Decision"}:
+                widget.configure(state="disabled" if is_locked else "readonly")
+            else:
+                widget.configure(state="disabled" if is_locked else "normal")
+        self._lock_status_var.set("This row has already been invited and is locked." if is_locked else "")
 
     def _on_batch_change(self) -> None:
         self._apply_edits()

@@ -85,3 +85,33 @@ def test_save_workbook_permission_error_message(monkeypatch, tmp_path):
     monkeypatch.setattr(c.workbook, "save", _raise)
     with pytest.raises(RuntimeError, match="Please close NB_Author_2026.xlsm"):
         c.save_workbook(tmp_path / "x.xlsm")
+
+
+def test_row_lock_state_depends_on_invitation_date():
+    c = make_controller()
+    c.set_batch("B1")
+    unlocked = c.get_current_row()
+    assert c.is_row_locked(unlocked) is False
+
+    c.set_row_value(unlocked.row_number, "Date of Invitaion", "2026-05-16")
+    locked = c.get_current_row()
+    assert c.is_row_locked(locked) is True
+    assert c.is_current_row_locked() is True
+
+
+def test_update_current_row_skips_locked_rows_and_updates_unlocked_rows():
+    c = make_controller()
+    c.set_batch("B1")
+    c.update_current_row({"Overseas": "No", "Manual Decision": "Insight", "Research field": "updated"})
+    updated = c.get_current_row().values
+    assert updated["Overseas"] == "No"
+    assert updated["Manual Decision"] == "Insight"
+    assert updated["Research field"] == "updated"
+
+    row_number = c.get_current_row().row_number
+    c.set_row_value(row_number, "Date of Invitaion", "2026-05-16")
+    c.update_current_row({"Overseas": "Yes", "Manual Decision": "Review", "Research field": "locked-change"})
+    locked = c.get_current_row().values
+    assert locked["Overseas"] == "No"
+    assert locked["Manual Decision"] == "Insight"
+    assert locked["Research field"] == "updated"

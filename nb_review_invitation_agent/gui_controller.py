@@ -8,7 +8,7 @@ from urllib.parse import quote_plus
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from .workbook import get_header_map, load_workbook_preserve_vba
+from .workbook import DATE_OF_INVITAION, get_header_map, load_workbook_preserve_vba
 
 UNBATCHED = "Unbatched"
 EDITABLE_FIELDS = ["Overseas", "Manual Decision", "Research field"]
@@ -122,9 +122,17 @@ class WorkbookReviewController:
             values[header] = "" if cell_value is None else str(cell_value)
         return RowView(row_number=row_number, values=values)
 
+    def is_row_locked(self, row_view: RowView) -> bool:
+        return bool((row_view.values.get(DATE_OF_INVITAION, "") or "").strip())
+
+    def is_current_row_locked(self) -> bool:
+        return self.is_row_locked(self.get_current_row())
+
     def update_current_row(self, updates: dict[str, str]) -> None:
         row_number = self._current_row_number()
         if row_number is None:
+            return
+        if self.is_current_row_locked():
             return
         for field, value in updates.items():
             if field not in EDITABLE_FIELDS:

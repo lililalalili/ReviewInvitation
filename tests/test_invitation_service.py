@@ -65,8 +65,14 @@ def test_skip_manual_no_and_already_invited_and_missing_recipient():
     assert svc1.invite_current().status == "Skipped"
 
     row2 = Row(2, {**base_values(), "Date of Invitaion": "2026-01-01"})
-    svc2 = InvitationService(FakeController(row2), renderer, FakeMailer(), lambda _: True, today_provider=lambda: date(2026, 5, 16))
-    assert "已邀请过" in svc2.invite_current().message
+    controller2 = FakeController(row2)
+    mailer2 = FakeMailer()
+    svc2 = InvitationService(controller2, renderer, mailer2, lambda _: True, today_provider=lambda: date(2026, 5, 16))
+    res2 = svc2.invite_current()
+    assert "已邀请过" in res2.message
+    assert res2.status == "Skipped"
+    assert mailer2.drafts == []
+    assert controller2.written == []
 
     row3 = Row(2, {**base_values(), "Email of the Last Author": ""})
     svc3 = InvitationService(FakeController(row3), renderer, FakeMailer(), lambda _: True, today_provider=lambda: date(2026, 5, 16))
