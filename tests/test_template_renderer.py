@@ -1,3 +1,4 @@
+import pytest
 from datetime import date
 from pathlib import Path
 
@@ -12,13 +13,13 @@ from nb_review_invitation_agent.template_renderer import (
 
 def test_template_selection_cases():
     c1 = select_template_and_subject({"Manual Decision": "Review", "Overseas": "Yes"})
-    assert c1.template_name == "NB_Template_Review_Yes.docx"
+    assert c1.template_name == "NB_Template_Review_Yes.html"
 
     c2 = select_template_and_subject({"Manual Decision": "Review", "Overseas": "No"})
-    assert c2.template_name == "NB_Template_Review_No.docx"
+    assert c2.template_name == "NB_Template_Review_No.html"
 
     c3 = select_template_and_subject({"Manual Decision": "Insight", "Overseas": "No"})
-    assert c3.template_name == "NB_Template_Insight.docx"
+    assert c3.template_name == "NB_Template_Insight.html"
 
 
 def test_placeholders_and_dates():
@@ -65,5 +66,26 @@ def test_rendered_invitation_includes_template_path_and_placeholders():
         date(2026, 5, 16),
     )
     assert rendered.template_path.is_absolute()
-    assert rendered.template_path.name == "NB_Template_Insight.docx"
+    assert rendered.template_path.name == "NB_Template_Insight.html"
     assert rendered.placeholders["Pppppno"].startswith("For invited authors")
+    assert rendered.rendered_html
+
+
+def test_dynamic_values_are_escaped_in_rendered_html(tmp_path: Path):
+    tpl = tmp_path / "NB_Template_Insight.html"
+    tpl.write_text("<html><body>Aaaaa|Jjjjj|Ttttt|Fffff|Pppppno|Dddddin</body></html>", encoding="utf-8")
+    rendered = TemplateRenderer(templates_dir=tmp_path).render_for_row({
+        "Manual Decision": "Insight",
+        "Overseas": "No",
+        "Family Name of the Last Author": "A&B <test>",
+        "Journal": "J&A <b>",
+        "Title": "T&A <x>.",
+        "Research field": "R&D <neuro>",
+    }, date(2026, 5, 16))
+    assert "A&amp;B &lt;test&gt;" in rendered.rendered_html
+    assert "A&amp;" in rendered.rendered_html
+
+
+def test_missing_html_template_raises_clear_error(tmp_path: Path):
+    with pytest.raises(FileNotFoundError, match="Template not found"):
+        TemplateRenderer(templates_dir=tmp_path).render_for_row({"Manual Decision": "Insight"}, date(2026, 5, 16))

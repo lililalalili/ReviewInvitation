@@ -61,7 +61,7 @@ class InvitationService:
             subject=rendered.subject,
             template_path=rendered.template_path,
             placeholders=rendered.placeholders,
-            body_text=rendered.body_text,
+            body_html=rendered.rendered_html,
         )
         try:
             sent = self.mailer.create_draft_and_maybe_send(draft, self.confirm_send)
